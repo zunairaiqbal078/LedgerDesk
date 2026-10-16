@@ -1,7 +1,8 @@
 import { z } from "zod";
+import type { ChatCompletion } from "openai/resources/chat/completions";
 import type { ParsedImportRow } from "@/lib/import-parser";
 import { CANADA_BANK_STATEMENT_KNOWLEDGE } from "@/lib/canada-bank-statement-knowledge";
-import { getOpenAI, getOpenAiPdfModel } from "@/lib/openai-client";
+import { getOpenAI, getOpenAiPdfModel, isOpenRouter } from "@/lib/openai-client";
 
 export type BankHint = {
   institutionName: string | null;
@@ -325,31 +326,36 @@ async function callJsonModel(
     : SYSTEM_PROMPT;
 
   const hasFile = userContent.some((c) => c.type === "file");
-  try {
-    if (hasFile || typeof (client as { responses?: unknown }).responses !== "undefined") {
-      const inputContent = userContent.map((part) => {
-        if (part.type === "text") {
-          return { type: "input_text" as const, text: part.text };
-        }
-        return {
-          type: "input_file" as const,
-          filename: part.file.filename,
-          file_data: part.file.file_data,
-        };
-      });
-      const response = await client.responses.create({
-        model,
-        input: [
-          { role: "system", content: system },
-          { role: "user", content: inputContent },
-        ],
-        text: { format: { type: "json_object" } },
-      });
-      const raw = response.output_text?.trim() || "{}";
-      return AiPayloadSchema.parse(JSON.parse(raw));
+  const openRouter = isOpenRouter();
+
+  // Native OpenAI Responses API (PDF as input_file). Skip on OpenRouter.
+  if (!openRouter) {
+    try {
+      if (hasFile || typeof (client as { responses?: unknown }).responses !== "undefined") {
+        const inputContent = userContent.map((part) => {
+          if (part.type === "text") {
+            return { type: "input_text" as const, text: part.text };
+          }
+          return {
+            type: "input_file" as const,
+            filename: part.file.filename,
+            file_data: part.file.file_data,
+          };
+        });
+        const response = await client.responses.create({
+          model,
+          input: [
+            { role: "system", content: system },
+            { role: "user", content: inputContent },
+          ],
+          text: { format: { type: "json_object" } },
+        });
+        const raw = response.output_text?.trim() || "{}";
+        return AiPayloadSchema.parse(JSON.parse(raw));
+      }
+    } catch (err) {
+      if (hasFile) throw err;
     }
-  } catch (err) {
-    if (hasFile) throw err;
   }
 
   const textParts = userContent
@@ -357,27 +363,54 @@ async function callJsonModel(
     .map((c) => c.text)
     .join("\n\n");
 
+  // OpenRouter / chat: multimodal file+text when PDF bytes are present
+  const userMessageContent = hasFile
+    ? userContent.map((part) =>
+        part.type === "text"
+          ? { type: "text" as const, text: part.text }
+          : {
+              type: "file" as const,
+              file: {
+                filename: part.file.filename,
+                file_data: part.file.file_data,
+              },
+            },
+      )
+    : textParts;
+
   const messages = [
     { role: "system" as const, content: system },
-    { role: "user" as const, content: textParts },
+    { role: "user" as const, content: userMessageContent },
   ];
 
-  let completion;
+  const baseBody = {
+    model,
+    stream: false as const,
+    response_format: { type: "json_object" as const },
+    messages,
+  };
+
+  let completion: ChatCompletion;
   try {
     completion = await client.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      messages,
+      ...baseBody,
       temperature: 0,
       max_completion_tokens: 32_768,
-    });
+      ...(openRouter ? { reasoning: { effort: "none" } } : {}),
+    // OpenRouter extras (reasoning) aren’t in the SDK types yet
+    } as never);
   } catch {
-    completion = await client.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      messages,
-      max_completion_tokens: 32_768,
-    });
+    try {
+      completion = await client.chat.completions.create({
+        ...baseBody,
+        max_completion_tokens: 32_768,
+      });
+    } catch {
+      completion = await client.chat.completions.create({
+        ...baseBody,
+        max_tokens: 16_384,
+      } as never);
+    }
   }
   const raw = completion.choices[0]?.message?.content?.trim() || "{}";
   return AiPayloadSchema.parse(JSON.parse(raw));

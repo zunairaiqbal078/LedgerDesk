@@ -95,15 +95,15 @@ export function FoldersManager({
           Folders & Saved Conversions
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Client: <strong>{clientName}</strong>. Folder sirf container hai — andar ki files{" "}
-          <strong>Save Conversion</strong> se aati hain (Transactions tab ke baad).
+          Client: <strong>{clientName}</strong>. A folder is only a container — saved files come
+          from <strong>Save Conversion</strong> (after you work on the Transactions tab).
         </p>
       </div>
 
       <Card className="border-teal-100 bg-teal-50/40 p-4 text-sm text-slate-700">
-        <strong>Store kaise karein:</strong> Import → categorize → top bar{" "}
-        <strong>Save Conversion</strong> → folder choose → save name. Phir folder par{" "}
-        <strong>Open folder</strong> ya neeche list se details dekhein.
+        <strong>How to save:</strong> Import → categorize → top bar{" "}
+        <strong>Save Conversion</strong> → choose folder → enter a save name. Then open the folder
+        with <strong>Open folder</strong> or view details in the list below.
       </Card>
 
       {canEdit ? (

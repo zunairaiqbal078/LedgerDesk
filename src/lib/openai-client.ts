@@ -1,24 +1,60 @@
 import OpenAI from "openai";
 
 let client: OpenAI | null = null;
-let clientKey: string | null = null;
+let clientFingerprint: string | null = null;
 
 export function getOpenAiApiKey(): string | null {
   const key = process.env.OPENAI_API_KEY?.trim();
   return key || null;
 }
 
-/** Default: gpt-4o-mini — widely available, vision+JSON, cheap for statement extract. */
+/**
+ * Optional override. Use for OpenRouter:
+ *   OPENAI_BASE_URL=https://openrouter.ai/api/v1
+ * Auto-set when the key looks like an OpenRouter key (sk-or-...).
+ */
+export function getOpenAiBaseUrl(): string | undefined {
+  const explicit = process.env.OPENAI_BASE_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  const key = getOpenAiApiKey();
+  if (key?.startsWith("sk-or-")) return "https://openrouter.ai/api/v1";
+  return undefined;
+}
+
+export function isOpenRouter(): boolean {
+  return Boolean(getOpenAiBaseUrl()?.includes("openrouter.ai"));
+}
+
+/**
+ * Default: gpt-4o-mini (OpenAI) / openai/gpt-4o-mini (OpenRouter).
+ * Luna on OpenRouter: openai/gpt-6-luna
+ */
 export function getOpenAiPdfModel(): string {
-  return process.env.OPENAI_PDF_MODEL?.trim() || "gpt-4o-mini";
+  const configured = process.env.OPENAI_PDF_MODEL?.trim();
+  if (configured) return configured;
+  return isOpenRouter() ? "openai/gpt-4o-mini" : "gpt-4o-mini";
 }
 
 export function getOpenAI(): OpenAI | null {
   const key = getOpenAiApiKey();
   if (!key) return null;
-  if (!client || clientKey !== key) {
-    client = new OpenAI({ apiKey: key });
-    clientKey = key;
+  const baseURL = getOpenAiBaseUrl();
+  const fingerprint = `${key}|${baseURL ?? ""}`;
+  if (!client || clientFingerprint !== fingerprint) {
+    client = new OpenAI({
+      apiKey: key,
+      ...(baseURL ? { baseURL } : {}),
+      ...(baseURL?.includes("openrouter.ai")
+        ? {
+            defaultHeaders: {
+              "HTTP-Referer":
+                process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000",
+              "X-Title": "LedgerDesk",
+            },
+          }
+        : {}),
+    });
+    clientFingerprint = fingerprint;
   }
   return client;
 }

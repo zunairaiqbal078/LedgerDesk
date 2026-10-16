@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { signupAction, type ActionResult } from "@/app/actions/org";
 import { Button, Input, Label } from "@/components/ui";
@@ -24,7 +25,7 @@ export function LoginForm() {
       callbackURL: "/app",
     });
     if (error) {
-      alert(error.message ?? "Login failed");
+      toast.error(error.message ?? "Login failed");
       return;
     }
     window.location.href = "/app";
@@ -34,8 +35,9 @@ export function LoginForm() {
     <form onSubmit={onSubmit} className="space-y-4">
       {authError === "session" ? (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Session expire ho gayi ya invalid hai. Dubara sign in karein. Agar bar bar aaye to browser
-          cookies clear karein ya DB check karein (<code className="text-xs">npm run db:up</code>).
+          Your session has expired or is invalid. Please sign in again. If this keeps happening,
+          clear your browser cookies or check that the database is running (
+          <code className="text-xs">npm run db:up</code>).
         </p>
       ) : null}
       {authError === "banned" ? (
