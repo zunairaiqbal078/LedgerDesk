@@ -1,36 +1,101 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LedgerDesk
 
-## Getting Started
+Production-oriented Next.js rebuild of the LedgerDesk Statement Converter HTML tool.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** (App Router) + TypeScript
+- **PostgreSQL** + **Prisma**
+- **Better Auth** (email/password sessions)
+- **Zod** validation, server actions, signed webhooks
+- **Tailwind CSS 4** professional UI
+
+## Tenancy & access
+
+| Actor | How they get access |
+|------|---------------------|
+| Firm owner | Signs up and creates an organization |
+| Team member | Owner/Admin creates email + password manually and shares it |
+| Super admin | Seeded from env; can enable/disable all firms |
+
+Data is isolated by `organizationId`. Transactions are scoped to the **selected bank**.
+
+### Roles
+
+- `OWNER` / `ADMIN` — manage banks, team, settings
+- `BOOKKEEPER` — work transactions / imports (Phase 2+)
+- `VIEWER` — read-only
+- `SUPER_ADMIN` — platform console at `/admin`
+
+## Quick start
+
+1. Start Postgres (Docker Desktop must be running):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm db:up
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Local compose maps Postgres to **host port 5434** (to avoid clashes with other local DBs).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+2. Copy env (already present for local):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.example .env
+```
 
-## Learn More
+3. Install, migrate, seed super admin:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+pnpm install
+pnpm db:push
+pnpm db:seed
+pnpm dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+4. Open [http://localhost:3000](http://localhost:3000)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Default super admin
 
-## Deploy on Vercel
+- Email: `admin@ledgerdesk.local`
+- Password: `ChangeMe_SuperAdmin_123!`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Change these in `.env` before production.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Key routes
+
+- `/signup` — firm self-registration
+- `/login` — firm owner or team login
+- `/app` — organization workspace
+- `/app/banks` — multi-bank management + header bank switcher
+- `/app/rules` — predefined rules (seeded)
+- `/app/settings` — profile, password, manual team members
+- `/admin` — super admin console
+- `/api/webhooks/inbound` — HMAC-signed webhook intake
+
+## Webhooks
+
+Send `POST /api/webhooks/inbound` with header:
+
+```text
+x-ledgerdesk-signature: sha256=<hmac_sha256_hex_of_raw_body>
+```
+
+Secret: `WEBHOOK_SECRET` from env.
+
+## Phase status
+
+**Done (Phase 0–1 foundation)**
+
+- Auth, RBAC, org isolation
+- Super admin
+- Manual team member creation (no email invite)
+- Banks + active bank context
+- Seeded tax codes, chart of accounts, predefined rules
+- Middleware security headers + webhook skeleton
+- Professional app shell
+
+**Next**
+
+- Statement import (CSV/PDF/XLS/OFX/QBO)
+- Rule engine apply + bulk categorize
+- Reconciliation, transfers, GE, GST/PST, exports

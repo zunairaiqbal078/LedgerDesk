@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ledgerdesk-postgres
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: ledgerdesk
+      POSTGRES_PASSWORD: ledgerdesk
+      POSTGRES_DB: ledgerdesk
+    volumes:
+      - ledgerdesk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerdesk -d ledgerdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ledgerdesk_pgdata:

@@ -1,0 +1,492 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GlobalRole {
+  SUPER_ADMIN
+  USER
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  BOOKKEEPER
+  VIEWER
+}
+
+/** ACCOUNTANT_FIRM = bookkeeping practice; CLIENT = end client books (toggle switches active client). */
+enum OrganizationKind {
+  ACCOUNTANT_FIRM
+  CLIENT
+}
+
+enum BankType {
+  BANK
+  CREDIT_CARD
+}
+
+enum AccountType {
+  INCOME
+  EXPENSE
+  ASSET
+  LIABILITY
+  EQUITY
+}
+
+enum TaxKind {
+  GST_HST
+  PST
+  OTHER
+  NONE
+}
+
+enum TaxMode {
+  INCLUSIVE
+  EXCLUSIVE
+  KEEP
+}
+
+enum MatchType {
+  CONTAINS
+  STARTS
+  EXACT
+  REGEX
+}
+
+enum AppliesTo {
+  BOTH
+  BANK
+  CREDIT_CARD
+}
+
+enum FilingFrequency {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  CUSTOM
+}
+
+enum ReconciliationStatus {
+  DRAFT
+  FINISHED
+  UNDONE
+}
+
+enum GeneralEntrySource {
+  AUTOMATIC
+  MANUAL
+}
+
+enum WebhookDeliveryStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  image         String?
+  globalRole    GlobalRole @default(USER)
+  banned        Boolean    @default(false)
+  banReason     String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  sessions           Session[]
+  accounts           Account[]
+  memberships        Membership[]
+  preferences        UserPreference?
+  auditLogs          AuditLog[]           @relation("AuditActor")
+  createdTeamMembers Membership[]         @relation("CreatedByUser")
+  webhookEvents      WebhookEvent[]
+}
+
+model Session {
+  id             String   @id @default(cuid())
+  expiresAt      DateTime
+  token          String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ipAddress      String?
+  userAgent      String?
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrganizationId String?
+  activeBankAccountId  String?
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  kind      OrganizationKind @default(CLIENT)
+  firmOrganizationId String?
+  /** Client default province (AB, ON, …) — drives import + PST profile. */
+  defaultProvince    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  firmOrganization   Organization?  @relation("FirmClients", fields: [firmOrganizationId], references: [id], onDelete: SetNull)
+  clientOrganizations Organization[] @relation("FirmClients")
+
+  fiscalYearStartMonth Int @default(1)
+  fiscalYearStartDay   Int @default(1)
+  gstYearStartMonth    Int @default(1)
+  gstYearStartDay      Int @default(1)
+  gstFilingFrequency   FilingFrequency @default(QUARTERLY)
+  pstFilingFrequency   FilingFrequency @default(QUARTERLY)
+
+  autoApplyRules Boolean @default(true)
+  autoLearnRules Boolean @default(true)
+  dateFormat     String  @default("YYYY-MM-DD")
+  /** When false, predefined (starter) COA rows are hidden until user clicks Add Small Business Accounts. */
+  starterChartVisible Boolean @default(false)
+
+  members          Membership[]
+  banks            BankAccount[]
+  chartAccounts    ChartAccount[]
+  taxCodes         TaxCode[]
+  rules            Rule[]
+  transactions     Transaction[]
+  folders          Folder[]
+  reconciliations  Reconciliation[]
+  generalEntries   GeneralEntry[]
+  transferMatches  TransferMatch[]
+  gstPeriods       GstPeriod[]
+  preferences      UserPreference[]
+  auditLogs        AuditLog[]
+  webhookEvents    WebhookEvent[]
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrgRole  @default(BOOKKEEPER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdById    String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("CreatedByUser", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model UserPreference {
+  id                   String  @id @default(cuid())
+  userId               String  @unique
+  activeOrganizationId String?
+  activeBankAccountId  String?
+
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrganization Organization? @relation(fields: [activeOrganizationId], references: [id], onDelete: SetNull)
+  activeBankAccount  BankAccount?  @relation(fields: [activeBankAccountId], references: [id], onDelete: SetNull)
+}
+
+model BankAccount {
+  id               String   @id @default(cuid())
+  organizationId   String
+  name             String
+  type             BankType @default(BANK)
+  mask             String?
+  currency         String   @default("CAD")
+  institutionName  String?
+  glAccountNumber  String?
+  glAccountName    String?
+  isArchived       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  preferences   UserPreference[]
+  reconciliations Reconciliation[]
+
+  @@index([organizationId])
+}
+
+model ChartAccount {
+  id             String      @id @default(cuid())
+  organizationId String
+  number         String
+  name           String
+  type           AccountType
+  defaultGstCode String?
+  defaultPstCode String?
+  isSystem       Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, number])
+  @@index([organizationId])
+}
+
+model TaxCode {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  rate           Decimal  @db.Decimal(8, 4)
+  kind           TaxKind  @default(GST_HST)
+  province       String?
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model Rule {
+  id                String    @id @default(cuid())
+  organizationId    String
+  name              String
+  descriptionMatch  String
+  matchType         MatchType @default(CONTAINS)
+  appliesTo         AppliesTo @default(BOTH)
+  applyDeposit      Boolean   @default(true)
+  applyWithdrawal   Boolean   @default(true)
+  accountNumber     String?
+  accountName       String?
+  taxCodes          String[]  @default([]) // Sales tax (GST/HST)
+  provinceTaxCodes  String[]  @default([]) // Province tax (PST/QST/RST)
+  taxMode           TaxMode   @default(INCLUSIVE)
+  active            Boolean   @default(true)
+  learned           Boolean   @default(false)
+  isBuiltIn         Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, active])
+}
+
+model Folder {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversions  SavedConversion[]
+
+  @@index([organizationId])
+}
+
+model SavedConversion {
+  id        String   @id @default(cuid())
+  folderId  String
+  name      String
+  snapshot  Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  folder Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@index([folderId])
+}
+
+model Transaction {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  bankAccountId        String
+  date                 DateTime  @db.Date
+  description          String
+  moneyIn              Decimal   @default(0) @db.Decimal(14, 2)
+  moneyOut             Decimal   @default(0) @db.Decimal(14, 2)
+  accountNumber        String?
+  accountName          String?
+  province             String?
+  taxCodes             String[]  @default([]) // Sales tax (GST/HST)
+  provinceTaxCodes     String[]  @default([]) // Province tax (PST/QST/RST)
+  taxMode              TaxMode   @default(INCLUSIVE)
+  notes                String?
+  externalTransactionId String?
+  transferMatchId      String?
+  transferCounterpartId String?
+  reconciledIn         Boolean   @default(false)
+  reconciledOut        Boolean   @default(false)
+  reconciliationInId   String?
+  reconciliationOutId  String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccount  BankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, bankAccountId, date])
+  @@index([organizationId, description])
+  @@unique([bankAccountId, externalTransactionId])
+}
+
+model Reconciliation {
+  id                      String               @id @default(cuid())
+  organizationId          String
+  bankAccountId           String
+  status                  ReconciliationStatus @default(DRAFT)
+  endDate                 DateTime             @db.Date
+  openingBalance          Decimal              @default(0) @db.Decimal(14, 2)
+  statementEndingBalance  Decimal              @default(0) @db.Decimal(14, 2)
+  calculatedEndingBalance Decimal              @default(0) @db.Decimal(14, 2)
+  moneyIn                 Decimal              @default(0) @db.Decimal(14, 2)
+  moneyOut                Decimal              @default(0) @db.Decimal(14, 2)
+  difference              Decimal              @default(0) @db.Decimal(14, 2)
+  clearedInIds            String[]             @default([])
+  clearedOutIds           String[]             @default([])
+  savedAt                 DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  undoneAt                DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccount  BankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, bankAccountId])
+}
+
+model GeneralEntry {
+  id             String             @id @default(cuid())
+  organizationId String
+  date           DateTime           @db.Date
+  memo           String?
+  periodLabel    String?
+  source         GeneralEntrySource @default(MANUAL)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines        GeneralEntryLine[]
+
+  @@index([organizationId, date])
+}
+
+model GeneralEntryLine {
+  id            String  @id @default(cuid())
+  entryId       String
+  accountNumber String?
+  accountName   String
+  memo          String?
+  debit         Decimal @default(0) @db.Decimal(14, 2)
+  credit        Decimal @default(0) @db.Decimal(14, 2)
+
+  entry GeneralEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+}
+
+model TransferMatch {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  amount               Decimal  @db.Decimal(14, 2)
+  fromTransactionId    String
+  toTransactionId      String
+  confirmedAt          DateTime @default(now())
+  createdAt            DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model GstPeriod {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  actorId        String?
+  action         String
+  entityType     String?
+  entityId       String?
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actor        User?         @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([actorId])
+}
+
+model WebhookEvent {
+  id             String                @id @default(cuid())
+  organizationId String?
+  userId         String?
+  provider       String
+  eventType      String
+  externalId     String?
+  payload        Json
+  status         WebhookDeliveryStatus @default(RECEIVED)
+  errorMessage   String?
+  receivedAt     DateTime              @default(now())
+  processedAt    DateTime?
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([provider, eventType])
+  @@index([externalId])
+}

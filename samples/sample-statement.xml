@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Statement>
+  <AccountName>Business Chequing</AccountName>
+  <Transactions>
+    <Transaction>
+      <Date>2026-02-01</Date>
+      <Description>TIM HORTONS DOWNTOWN</Description>
+      <Amount>-9.85</Amount>
+      <Id>XML-001</Id>
+    </Transaction>
+    <Transaction>
+      <Date>2026-02-02</Date>
+      <Description>SHELL CANADA</Description>
+      <Amount>-72.10</Amount>
+      <Id>XML-002</Id>
+    </Transaction>
+    <Transaction>
+      <Date>2026-02-03</Date>
+      <Description>INVOICE PAYMENT ABC CORP</Description>
+      <Amount>2200.00</Amount>
+      <Id>XML-003</Id>
+    </Transaction>
+  </Transactions>
+</Statement>
