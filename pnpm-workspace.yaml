@@ -9,4 +9,4 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   workerd: false
-  tesseract.js: set this to true or false
+  tesseract.js: true
