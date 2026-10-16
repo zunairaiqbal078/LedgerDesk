@@ -202,10 +202,12 @@ export async function saveReconciliationAction(
   });
   if (!bank) return { ok: false, error: "Bank not found." };
 
-  // Bank: opening + in - out; Credit card often inverted conceptually but we keep same math on money in/out fields
+  // Bank: opening + in − out. Credit card: opening + out − in (matches statement converter).
   const calculatedEnding =
-    parsed.data.openingBalance + moneyIn - moneyOut;
-  const difference = calculatedEnding - parsed.data.statementEndingBalance;
+    bank.type === "CREDIT_CARD"
+      ? parsed.data.openingBalance + moneyOut - moneyIn
+      : parsed.data.openingBalance + moneyIn - moneyOut;
+  const difference = parsed.data.statementEndingBalance - calculatedEnding;
 
   const data = {
     organizationId: organization.id,

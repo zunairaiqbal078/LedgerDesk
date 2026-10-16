@@ -115,6 +115,12 @@ export function buildPeriods(
   });
 }
 
+/**
+ * Matches reference converter (`ledgerdesk_statement_converter`):
+ * - Exclusive: kindTax = gross × kindRate/100; net = gross
+ * - Inclusive with GST+PST: kindTax = gross × (kindRate/100) / (1 + totalRate/100);
+ *   net = gross − total embedded tax (all GST/HST+PST rates)
+ */
 export function taxAmountFor(
   grossIn: number,
   grossOut: number,
@@ -122,23 +128,34 @@ export function taxAmountFor(
   mode: "INCLUSIVE" | "EXCLUSIVE" | "KEEP",
   kindFilter: "GST_HST" | "PST",
 ) {
-  const rate = codes
+  const kindRate = codes
     .filter((c) => c.kind === kindFilter)
     .reduce((sum, c) => sum + Number(c.rate), 0);
-  if (rate <= 0) return { tax: 0, netIn: grossIn, netOut: grossOut };
+  const totalRate = codes
+    .filter((c) => c.kind === "GST_HST" || c.kind === "PST")
+    .reduce((sum, c) => sum + Number(c.rate), 0);
 
   const gross = grossIn > 0 ? grossIn : grossOut;
   const direction = grossIn > 0 ? "in" : "out";
+
+  if (gross <= 0 || kindRate <= 0) {
+    return { tax: 0, netIn: grossIn, netOut: grossOut };
+  }
+
   let tax = 0;
   let net = gross;
 
   if (mode === "EXCLUSIVE") {
-    tax = (gross * rate) / 100;
+    tax = (gross * kindRate) / 100;
     net = gross;
   } else {
-    // Inclusive (default): tax portion inside gross
-    tax = gross - gross / (1 + rate / 100);
-    net = gross - tax;
+    tax =
+      totalRate > 0
+        ? (gross * (kindRate / 100)) / (1 + totalRate / 100)
+        : 0;
+    const totalTax =
+      totalRate > 0 ? gross - gross / (1 + totalRate / 100) : 0;
+    net = gross - totalTax;
   }
 
   return {

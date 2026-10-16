@@ -82,8 +82,12 @@ export function ReconciliationWorkspace({
     .reduce((s, tx) => s + tx.moneyOut, 0);
   const openingNum = Number(opening) || 0;
   const endingNum = Number(ending) || 0;
-  const calculated = openingNum + clearedInTotal - clearedOutTotal;
-  const difference = calculated - endingNum;
+  // Bank: opening + in − out. Credit card (HTML converter): opening + out − in.
+  const calculated =
+    bankType === "CREDIT_CARD"
+      ? openingNum + clearedOutTotal - clearedInTotal
+      : openingNum + clearedInTotal - clearedOutTotal;
+  const difference = endingNum - calculated;
 
   function toggleIn(id: string) {
     setClearedIn((prev) => {
@@ -137,8 +141,10 @@ export function ReconciliationWorkspace({
           Reconciliation
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          {bankName} ({bankType === "CREDIT_CARD" ? "Credit Card" : "Bank"}): Opening + Money In −
-          Money Out = Calculated ending
+          {bankName} ({bankType === "CREDIT_CARD" ? "Credit Card" : "Bank"}):{" "}
+          {bankType === "CREDIT_CARD"
+            ? "Opening + Money Out − Money In = Calculated ending"
+            : "Opening + Money In − Money Out = Calculated ending"}
         </p>
       </div>
 

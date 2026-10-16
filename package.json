@@ -18,6 +18,7 @@
     "db:status": "docker compose ps && (nc -z localhost 5434 && echo 'Postgres port 5434: open' || echo 'Postgres port 5434: closed — run npm run db:up after Docker Desktop is running')",
     "test:pdf": "tsx scripts/test-pdf-ai.ts",
     "test:pdf:ai": "tsx scripts/test-pdf-ai.ts --ai",
+    "test:calcs": "tsx scripts/test-calc-modules.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {
