@@ -783,8 +783,6 @@ export async function deleteBankAction(formData: FormData): Promise<ActionResult
     },
   });
 
-  revalidatePath("/app/banks");
-  revalidatePath("/app");
   revalidatePath("/app");
   return {
     ok: true,
@@ -832,8 +830,6 @@ export async function bulkDeleteBanksAction(formData: FormData): Promise<ActionR
     },
   });
 
-  revalidatePath("/app/banks");
-  revalidatePath("/app");
   revalidatePath("/app");
   return {
     ok: true,
@@ -856,7 +852,7 @@ export async function setActiveBankAction(formData: FormData) {
   });
 
   if (!bank) {
-    redirect("/app/banks?error=invalid-bank");
+    redirect("/app?error=invalid-bank");
   }
 
   await prisma.userPreference.upsert({

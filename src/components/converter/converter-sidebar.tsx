@@ -361,12 +361,6 @@ export function ConverterSidebar({
               ))}
             </select>
           </form>
-          <Link
-            href="/app/banks"
-            className="mt-2 block w-full rounded-lg border border-[#d6e1e9] bg-[#f6f9fb] px-3 py-2 text-center text-sm font-semibold"
-          >
-            Bank Connections
-          </Link>
         </CollapsibleSection>
 
         <CollapsibleSection title="Statement Import" defaultOpen={true}>

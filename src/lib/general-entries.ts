@@ -41,6 +41,8 @@ function periodKey(date: Date, mode: "MONTHLY" | "QUARTERLY" | "YEARLY") {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
+export type GePeriodType = "MONTHLY" | "QUARTERLY" | "YEARLY" | "CUSTOM";
+
 /**
  * Generates simplified double-entry journals:
  * - Expense money-out: Dr Expense / Cr Bank
@@ -51,15 +53,42 @@ function periodKey(date: Date, mode: "MONTHLY" | "QUARTERLY" | "YEARLY") {
 export function generateAutomaticEntries(
   transactions: GeTx[],
   options: {
-    periodType: "MONTHLY" | "QUARTERLY" | "YEARLY";
+    periodType: GePeriodType;
     taxRateByCode: Map<string, number>;
+    customStart?: Date | null;
+    customEnd?: Date | null;
+    inputTaxAccount?: { number: string | null; name: string } | null;
+    outputTaxAccount?: { number: string | null; name: string } | null;
   },
 ): GeneratedEntry[] {
+  const inputTax = options.inputTaxAccount ?? {
+    number: "2150",
+    name: "GST/HST Recoverable (ITC)",
+  };
+  const outputTax = options.outputTaxAccount ?? {
+    number: "2100",
+    name: "GST/HST Payable",
+  };
+
   const groups = new Map<string, GeTx[]>();
 
   for (const tx of transactions) {
     if (tx.transferMatchId) continue;
     if (!tx.accountName) continue;
+
+    if (options.periodType === "CUSTOM") {
+      const start = options.customStart;
+      const end = options.customEnd;
+      if (!start || !end) continue;
+      const t = tx.date.getTime();
+      if (t < start.getTime() || t > end.getTime()) continue;
+      const key = `C:${start.toISOString().slice(0, 10)}:${end.toISOString().slice(0, 10)}`;
+      const list = groups.get(key) ?? [];
+      list.push(tx);
+      groups.set(key, list);
+      continue;
+    }
+
     const key = periodKey(tx.date, options.periodType);
     const list = groups.get(key) ?? [];
     list.push(tx);
@@ -68,7 +97,11 @@ export function generateAutomaticEntries(
 
   const entries: GeneratedEntry[] = [];
 
-  for (const [label, rows] of groups) {
+  for (const [rawLabel, rows] of groups) {
+    const label =
+      options.periodType === "CUSTOM" && rawLabel.startsWith("C:")
+        ? `Custom — ${rawLabel.slice(2).replace(":", " to ")}`
+        : rawLabel;
     // Aggregate by category + bank
     type Agg = {
       accountNumber: string | null;
@@ -137,8 +170,8 @@ export function generateAutomaticEntries(
         });
         if (row.taxOnExpenses > 0) {
           lines.push({
-            accountNumber: "2150",
-            accountName: "GST/HST Recoverable (ITC)",
+            accountNumber: inputTax.number,
+            accountName: inputTax.name,
             memo: `ITC ${label}`,
             debit: round2(row.taxOnExpenses),
             credit: 0,
@@ -169,8 +202,8 @@ export function generateAutomaticEntries(
         });
         if (row.taxOnIncome > 0) {
           lines.push({
-            accountNumber: "2100",
-            accountName: "GST/HST Payable",
+            accountNumber: outputTax.number,
+            accountName: outputTax.name,
             memo: `GST collected ${label}`,
             debit: 0,
             credit: round2(row.taxOnIncome),

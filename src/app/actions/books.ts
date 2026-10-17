@@ -1116,7 +1116,6 @@ export async function importTransactionsAction(
   });
 
   revalidatePath("/app");
-  revalidatePath("/app/banks");
   return {
     ok: true,
     count: created.length,

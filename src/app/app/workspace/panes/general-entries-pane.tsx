@@ -18,10 +18,27 @@ export default async function GeneralEntriesPane() {
     }),
   ]);
 
+  const defaultInputTax =
+    accounts.find((a) => /recoverable|itc|gst paid/i.test(a.name)) ??
+    accounts.find((a) => a.number === "2150") ??
+    null;
+  const defaultOutputTax =
+    accounts.find((a) => /payable|gst collected|hst payable/i.test(a.name)) ??
+    accounts.find((a) => a.number === "2100") ??
+    null;
+
   return (
     <GeneralEntriesWorkspace
       canEdit={canEditTransactions(role)}
       accounts={accounts.map((a) => ({ number: a.number, name: a.name }))}
+      fiscalYearStartMonth={organization.fiscalYearStartMonth}
+      fiscalYearStartDay={organization.fiscalYearStartDay}
+      defaultInputTaxAccount={
+        defaultInputTax ? `${defaultInputTax.number}||${defaultInputTax.name}` : ""
+      }
+      defaultOutputTaxAccount={
+        defaultOutputTax ? `${defaultOutputTax.number}||${defaultOutputTax.name}` : ""
+      }
       entries={entries.map((entry) => {
         const debit = entry.lines.reduce((s, l) => s + Number(l.debit), 0);
         const credit = entry.lines.reduce((s, l) => s + Number(l.credit), 0);

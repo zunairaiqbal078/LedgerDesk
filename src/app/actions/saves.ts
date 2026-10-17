@@ -423,7 +423,6 @@ async function loadSavedConversionIntoWorkspace(
   });
 
   revalidatePath("/app");
-  revalidatePath("/app/banks");
   revalidatePath("/app/folders");
 
   return {

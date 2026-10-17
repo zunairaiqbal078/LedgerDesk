@@ -324,7 +324,61 @@ export async function generateGeneralEntriesAction(
   const periodType = String(formData.get("periodType") ?? "MONTHLY") as
     | "MONTHLY"
     | "QUARTERLY"
-    | "YEARLY";
+    | "YEARLY"
+    | "CUSTOM";
+
+  if (!["MONTHLY", "QUARTERLY", "YEARLY", "CUSTOM"].includes(periodType)) {
+    return { ok: false, error: "Invalid period type." };
+  }
+
+  const customStartRaw = String(formData.get("customStartDate") ?? "").trim();
+  const customEndRaw = String(formData.get("customEndDate") ?? "").trim();
+  const customStart = customStartRaw ? new Date(customStartRaw) : null;
+  const customEnd = customEndRaw ? new Date(customEndRaw) : null;
+
+  if (periodType === "CUSTOM") {
+    if (
+      !customStart ||
+      !customEnd ||
+      Number.isNaN(customStart.getTime()) ||
+      Number.isNaN(customEnd.getTime()) ||
+      customStart > customEnd
+    ) {
+      return {
+        ok: false,
+        error: "Choose a valid Custom Start Date and Custom End Date before generating.",
+      };
+    }
+  }
+
+  const fiscalStartMonth = Math.min(
+    12,
+    Math.max(1, Number(formData.get("fiscalStartMonth")) || organization.fiscalYearStartMonth || 1),
+  );
+  const fiscalStartDay = Math.min(
+    28,
+    Math.max(1, Number(formData.get("fiscalStartDay")) || organization.fiscalYearStartDay || 1),
+  );
+
+  const parseTaxAccount = (raw: string) => {
+    const value = raw.trim();
+    if (!value) return null;
+    const [number, ...rest] = value.split("||");
+    const name = rest.join("||").trim();
+    if (!name && !number) return null;
+    return { number: number || null, name: name || number || "Tax account" };
+  };
+
+  const inputTaxAccount = parseTaxAccount(String(formData.get("inputTaxAccount") ?? ""));
+  const outputTaxAccount = parseTaxAccount(String(formData.get("outputTaxAccount") ?? ""));
+
+  await prisma.organization.update({
+    where: { id: organization.id },
+    data: {
+      fiscalYearStartMonth: fiscalStartMonth,
+      fiscalYearStartDay: fiscalStartDay,
+    },
+  });
 
   const [transactions, taxCodes] = await Promise.all([
     prisma.transaction.findMany({
@@ -352,7 +406,14 @@ export async function generateGeneralEntriesAction(
       bankName: tx.bankAccount.name,
       bankType: tx.bankAccount.type,
     })),
-    { periodType, taxRateByCode: rateMap },
+    {
+      periodType,
+      taxRateByCode: rateMap,
+      customStart,
+      customEnd,
+      inputTaxAccount,
+      outputTaxAccount,
+    },
   );
 
   // Replace previous automatic entries
