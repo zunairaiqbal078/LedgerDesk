@@ -10,6 +10,7 @@ import {
   deleteTransactionsAction,
   duplicateTransactionsAction,
   importTransactionsAction,
+  swapDebitCreditAction,
 } from "@/app/actions/books";
 import {
   clearLoadedConversionContext,
@@ -17,9 +18,11 @@ import {
   REQUEST_NEW_CONVERSION_KEY,
   writeLoadedConversionContext,
 } from "@/lib/conversion-export";
+import { takePendingImportFiles } from "@/lib/pending-import";
 import { TransactionTaxPickerModal } from "@/components/transaction-tax-picker-modal";
 import { BulkDeleteTransactionsModal } from "@/components/bulk-delete-transactions-modal";
 import { BulkEditTransactionsModal } from "@/components/bulk-edit-transactions-modal";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { EditableTransactionRow } from "@/components/editable-transaction-row";
 import { SaveConversionDialog } from "@/components/save-conversion-dialog";
 import { ImportGuardModal } from "@/components/import-guard-modal";
@@ -101,6 +104,20 @@ function rowsFromParsed(rows: ParsedImportRow[]): PendingRows {
   }));
 }
 
+/** Flip Money In ↔ Money Out (debit/credit). */
+function swapMoneySides<T extends { moneyIn: number; moneyOut: number }>(rows: T[]): T[] {
+  return rows.map((row) => ({
+    ...row,
+    moneyIn: row.moneyOut,
+    moneyOut: row.moneyIn,
+  }));
+}
+
+function readSidebarStatementIsCreditCard(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem("ledgerdesk-statement-type") === "Credit Card";
+}
+
 function postingAccountLabel(tx: TxRow) {
   return tx.bankName ?? "—";
 }
@@ -173,7 +190,7 @@ export function TransactionsWorkspace({
       return;
     }
     if (rows.length > 0) {
-      pendingImportFileRef.current = null;
+      pendingImportFilesRef.current = null;
       setImportGuardMode("new");
       setImportGuardOpen(true);
     }
@@ -223,6 +240,7 @@ export function TransactionsWorkspace({
   const [pendingRows, setPendingRows] = useState<PendingRows | null>(null);
   const [pendingLabel, setPendingLabel] = useState("");
   const [parseLoadingFile, setParseLoadingFile] = useState<string | null>(null);
+  const [parseLoadingStatus, setParseLoadingStatus] = useState<string | null>(null);
   const [previewExpanded, setPreviewExpanded] = useState(true);
   const [pendingBankHint, setPendingBankHint] = useState<{
     institutionName: string | null;
@@ -242,11 +260,13 @@ export function TransactionsWorkspace({
   const [importBankId, setImportBankId] = useState(activeBankId ?? banks[0]?.id ?? "");
   const [newBankName, setNewBankName] = useState("");
   const [newBankType, setNewBankType] = useState<"BANK" | "CREDIT_CARD">("BANK");
+  /** Manual flip on import preview when Debit/Credit sides were imported backwards. */
+  const [previewSwapSides, setPreviewSwapSides] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [importGuardOpen, setImportGuardOpen] = useState(false);
   const [importGuardMode, setImportGuardMode] = useState<"import" | "new">("import");
-  const pendingImportFileRef = useRef<File | null>(null);
+  const pendingImportFilesRef = useRef<File[] | null>(null);
   const replaceBeforeNextImportRef = useRef(false);
   const [taxPickerTxId, setTaxPickerTxId] = useState<string | null>(null);
   const [dirtyRowIds, setDirtyRowIds] = useState<Set<string>>(new Set());
@@ -415,9 +435,22 @@ export function TransactionsWorkspace({
     setPendingLabel(label);
     setPendingBankHint(bankHint ?? null);
     setPreviewExpanded(true);
+    setPreviewSwapSides(false);
     setImportBankMode(banks.length ? "existing" : "new");
     setImportBankId(activeBankId ?? banks[0]?.id ?? "");
     setNewBankName("");
+    const preferCc =
+      readSidebarStatementIsCreditCard() || bankHint?.statementType === "CREDIT_CARD";
+    const preferredType = preferCc ? "CREDIT_CARD" : "BANK";
+    setNewBankType(preferredType);
+    const typedBanks = banks.filter((b) => b.type === preferredType);
+    if (typedBanks.length) {
+      const activeOk = typedBanks.some((b) => b.id === (activeBankId ?? ""));
+      setImportBankId(activeOk && activeBankId ? activeBankId : typedBanks[0]!.id);
+      setImportBankMode("existing");
+    } else {
+      setImportBankMode(banks.length ? "existing" : "new");
+    }
     if (bankHint?.institutionName) {
       void import("@/lib/bank-hint-match").then(({ resolveBankFromHint }) => {
         const resolved = resolveBankFromHint(banks, bankHint);
@@ -485,8 +518,10 @@ export function TransactionsWorkspace({
   function startParseLoading(fileName: string) {
     clearParseStatusTimer();
     setParseLoadingFile(fileName);
+    setParseLoadingStatus(`Starting ${fileName}…`);
     let tick = 0;
     const pushStatus = (msg: string) => {
+      setParseLoadingStatus(msg);
       window.dispatchEvent(new CustomEvent("ledgerdesk:import-status", { detail: msg }));
     };
     pushStatus(`${SIDEBAR_PARSE_MESSAGES[0]} (${fileName})`);
@@ -499,9 +534,172 @@ export function TransactionsWorkspace({
   function stopParseLoading(finalStatus = "Ready — choose a statement to begin.") {
     clearParseStatusTimer();
     setParseLoadingFile(null);
+    setParseLoadingStatus(null);
     window.dispatchEvent(
       new CustomEvent("ledgerdesk:import-status", { detail: finalStatus }),
     );
+  }
+
+  /** Parse one statement into pending rows (auto-map spreadsheets — used for bulk). */
+  async function parseFileToPending(file: File): Promise<{
+    rows: PendingRows;
+    bankHint?: {
+      institutionName: string | null;
+      statementType: "BANK" | "CREDIT_CARD" | null;
+      accountLast4?: string | null;
+      openingBalance?: number | null;
+      closingBalance?: number | null;
+      totalWithdrawals?: number | null;
+      totalDeposits?: number | null;
+      periodLabel?: string | null;
+    } | null;
+    sourceLabel: string;
+  } | null> {
+    const lower = file.name.toLowerCase();
+
+    if (/\.(jpe?g|png|webp)$/i.test(lower)) {
+      const { parseStatementFromImageFile } = await import("@/lib/ocr-statement-import");
+      const parsed = await parseStatementFromImageFile(file);
+      if (!parsed.rows.length) return null;
+      return {
+        rows: rowsFromParsed(parsed.rows),
+        sourceLabel: `OCR: ${file.name}`,
+      };
+    }
+
+    if (lower.endsWith(".pdf") || lower.endsWith(".xml") || lower.endsWith(".camt")) {
+      const parsed = await parseViaApi(file);
+      if (parsed.rows?.length) {
+        const src = parsed.source?.startsWith("openai")
+          ? `AI (${parsed.source.replace("openai-", "")})`
+          : parsed.format.toUpperCase();
+        return {
+          rows: parsed.rows,
+          bankHint: parsed.bankHint ?? null,
+          sourceLabel: `${src}: ${parsed.fileName}`,
+        };
+      }
+      if (lower.endsWith(".pdf")) {
+        const { isOcrPdfFallbackEnabled } = await import("@/lib/import-preferences");
+        if (isOcrPdfFallbackEnabled()) {
+          const { parseStatementFromPdfFileViaOcr } = await import("@/lib/pdf-statement-import");
+          const ocrParsed = await parseStatementFromPdfFileViaOcr(file);
+          if (ocrParsed.rows.length) {
+            return {
+              rows: rowsFromParsed(ocrParsed.rows),
+              sourceLabel: `OCR PDF: ${file.name}`,
+            };
+          }
+        }
+      }
+      return null;
+    }
+
+    if (isOfxOrQboFileName(file.name) || lower.endsWith(".qfx")) {
+      try {
+        const text = await file.text();
+        const parsed = lower.endsWith(".xml") ? parseBankXml(text) : parseOfxOrQbo(text);
+        if (!parsed.rows.length) return null;
+        return { rows: rowsFromParsed(parsed.rows), sourceLabel: file.name };
+      } catch {
+        const parsed = await parseViaApi(file);
+        if (!parsed.rows?.length) return null;
+        return { rows: parsed.rows, sourceLabel: file.name, bankHint: parsed.bankHint };
+      }
+    }
+
+    const matrix = await parseImportFile(file);
+    if (!matrix.headers.length || !matrix.rows.length) return null;
+    const guessed = guessMapping(matrix);
+    const mapping: ColumnMapping = {
+      date: guessed.date ?? matrix.headers[0],
+      description: guessed.description ?? matrix.headers[1] ?? matrix.headers[0],
+      moneyIn: guessed.moneyIn,
+      moneyOut: guessed.moneyOut,
+      amount: guessed.moneyIn || guessed.moneyOut ? undefined : guessed.amount,
+      txnType: guessed.txnType,
+      signedRule: guessed.signedRule ?? "positiveIn",
+      dateFormat: dateFormatPref !== "AUTO" ? dateFormatPref : guessed.dateFormat ?? "AUTO",
+    };
+    let best = mapRowsToTransactions(matrix, mapping);
+    for (const fmt of (
+      dateFormatPref !== "AUTO" ? [dateFormatPref] : ["MDY", "DMY", "AUTO"]
+    ) as DateFormatPreference[]) {
+      const attempt = mapRowsToTransactions(matrix, { ...mapping, dateFormat: fmt });
+      if (attempt.rows.length > best.rows.length) {
+        best = attempt;
+        mapping.dateFormat = fmt;
+      }
+    }
+    if (!best.rows.length) return null;
+    return {
+      rows: rowsFromParsed(best.rows),
+      sourceLabel: file.name,
+    };
+  }
+
+  async function onPickFiles(files: File[]) {
+    const list = files.filter(Boolean);
+    if (!list.length) return;
+    if (list.length === 1) {
+      await onPickFile(list[0]!);
+      return;
+    }
+
+    startParseLoading(`${list.length} files`);
+    let okStatus = "Ready — choose a statement to begin.";
+    const merged: PendingRows = [];
+    const labels: string[] = [];
+    let bankHint: Parameters<typeof openConfirm>[2] = null;
+    let failed = 0;
+
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i]!;
+        const progress = `Parsing ${i + 1}/${list.length}: ${file.name}…`;
+        setParseLoadingStatus(progress);
+        window.dispatchEvent(
+          new CustomEvent("ledgerdesk:import-status", { detail: progress }),
+        );
+        try {
+          const result = await parseFileToPending(file);
+          if (!result?.rows.length) {
+            failed += 1;
+            toast.message(`No transactions in ${file.name}`);
+            continue;
+          }
+          merged.push(...result.rows);
+          labels.push(`${file.name} (${result.rows.length})`);
+          if (!bankHint && result.bankHint) bankHint = result.bankHint;
+          toast.message(`${file.name}: ${result.rows.length} row(s)`);
+        } catch (err) {
+          failed += 1;
+          toast.error(
+            `${file.name}: ${err instanceof Error ? err.message : "parse failed"}`,
+          );
+        }
+      }
+
+      if (!merged.length) {
+        toast.error("No transactions found in the selected files.");
+        okStatus = "No transactions found — try other files.";
+        return;
+      }
+
+      setMatrix(null);
+      setMapping(null);
+      openConfirm(
+        merged,
+        `Bulk import · ${list.length - failed} file(s) · ${merged.length} transactions`,
+        bankHint,
+      );
+      toast.success(
+        `Merged ${merged.length} transactions from ${list.length - failed} file${list.length - failed === 1 ? "" : "s"}${failed ? ` (${failed} skipped)` : ""}.`,
+      );
+      okStatus = "Ready — review the preview, then import.";
+    } finally {
+      stopParseLoading(okStatus);
+    }
   }
 
   async function onPickFile(file: File | null) {
@@ -667,16 +865,35 @@ export function TransactionsWorkspace({
   }, []);
 
   useEffect(() => {
-    const onImport = (e: Event) => {
-      const file = (e as CustomEvent<File>).detail;
-      if (!(file instanceof File)) return;
+    // Files stashed when user imported from another tab (e.g. GST)
+    const stashed = takePendingImportFiles();
+    if (stashed?.length) {
       if (rows.length > 0) {
-        pendingImportFileRef.current = file;
+        pendingImportFilesRef.current = stashed;
+        setImportGuardMode("import");
+        setImportGuardOpen(true);
+      } else {
+        void onPickFiles(stashed);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onImport = (e: Event) => {
+      const detail = (e as CustomEvent<File | File[]>).detail;
+      const files = Array.isArray(detail)
+        ? detail.filter((f): f is File => f instanceof File)
+        : detail instanceof File
+          ? [detail]
+          : [];
+      if (!files.length) return;
+      if (rows.length > 0) {
+        pendingImportFilesRef.current = files;
         setImportGuardMode("import");
         setImportGuardOpen(true);
         return;
       }
-      void onPickFile(file);
+      void onPickFiles(files);
     };
     const onSave = () => setSaveOpen(true);
     const onNew = () => {
@@ -685,7 +902,7 @@ export function TransactionsWorkspace({
         return;
       }
       if (rows.length > 0) {
-        pendingImportFileRef.current = null;
+        pendingImportFilesRef.current = null;
         setImportGuardMode("new");
         setImportGuardOpen(true);
         return;
@@ -727,6 +944,30 @@ export function TransactionsWorkspace({
     };
   }
 
+  const importStatementType = useMemo((): "BANK" | "CREDIT_CARD" => {
+    if (importBankMode === "new") return newBankType;
+    return banks.find((b) => b.id === importBankId)?.type ?? newBankType;
+  }, [importBankMode, newBankType, banks, importBankId]);
+
+  /** Preview + import rows after optional manual Debit/Credit swap. */
+  const previewPendingRows = useMemo(() => {
+    if (!pendingRows) return null;
+    return previewSwapSides ? swapMoneySides(pendingRows) : pendingRows;
+  }, [pendingRows, previewSwapSides]);
+
+  function setImportStatementType(type: "BANK" | "CREDIT_CARD") {
+    setNewBankType(type);
+    const typed = banks.filter((b) => b.type === type);
+    if (typed.length) {
+      setImportBankMode("existing");
+      if (!typed.some((b) => b.id === importBankId)) {
+        setImportBankId(typed[0]!.id);
+      }
+    } else {
+      setImportBankMode("new");
+    }
+  }
+
   function confirmMappedImport() {
     if (!matrix || !mapping) return;
     const { rows, errors } = mapRowsToTransactions(matrix, mapping);
@@ -743,12 +984,13 @@ export function TransactionsWorkspace({
     if (errors.length) {
       toast.message(`Imported ${rows.length}; skipped ${errors.length} row(s).`);
     }
-    submitImport(rowsFromParsed(rows));
+    const pending = rowsFromParsed(rows);
+    submitImport(previewSwapSides ? swapMoneySides(pending) : pending);
   }
 
   function confirmDirectImport() {
-    if (!pendingRows?.length) return;
-    submitImport(pendingRows);
+    if (!previewPendingRows?.length) return;
+    submitImport(previewPendingRows);
   }
 
   function submitImport(rows: PendingRows) {
@@ -769,6 +1011,7 @@ export function TransactionsWorkspace({
         setMatrix(null);
         setMapping(null);
         setPendingRows(null);
+        setPreviewSwapSides(false);
         setSelected(new Set());
       } else {
         toast.error(result.error ?? "Import failed");
@@ -821,6 +1064,32 @@ export function TransactionsWorkspace({
       const result = await duplicateTransactionsAction(formData);
       if (result.ok) toast.success(result.message ?? "Duplicated");
       else toast.error(result.error ?? "Duplicate failed");
+    });
+  }
+
+  function runSwapDebitCredit() {
+    const ids = selected.size ? [...selected] : filtered.map((tx) => tx.id);
+    if (!ids.length) {
+      toast.error("No transactions to swap.");
+      return;
+    }
+    const idSet = new Set(ids);
+    setRows((prev) =>
+      prev.map((tx) =>
+        idSet.has(tx.id) ? { ...tx, moneyIn: tx.moneyOut, moneyOut: tx.moneyIn } : tx,
+      ),
+    );
+    const formData = new FormData();
+    formData.set("ids", ids.join(","));
+    startTransition(async () => {
+      const result = await swapDebitCreditAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? "Swapped Money In ↔ Money Out");
+        router.refresh();
+      } else {
+        toast.error(result.error ?? "Swap failed");
+        router.refresh();
+      }
     });
   }
 
@@ -894,7 +1163,18 @@ export function TransactionsWorkspace({
                 >
                   Duplicate Selected
                 </button>
-                <button type="button" className="btn-converter btn-light" id="swapDebitCreditBtn" disabled>
+                <button
+                  type="button"
+                  className="btn-converter btn-light"
+                  id="swapDebitCreditBtn"
+                  disabled={pending || (!selected.size && !filtered.length)}
+                  onClick={runSwapDebitCredit}
+                  title={
+                    selected.size
+                      ? `Swap Money In ↔ Money Out on ${selected.size} selected`
+                      : "Swap Money In ↔ Money Out on all visible transactions"
+                  }
+                >
                   ⇄ Swap Debit / Credit
                 </button>
                 <button
@@ -1039,7 +1319,7 @@ export function TransactionsWorkspace({
         ))}
       </div>
 
-      <div className="table-wrap">
+      <DualScrollArea className="table-wrap">
         <table className="tx-table">
           <thead>
             <tr>
@@ -1107,7 +1387,7 @@ export function TransactionsWorkspace({
             <div>Import a bank or credit card statement, or add a blank row.</div>
           </div>
         ) : null}
-      </div>
+      </DualScrollArea>
 
       <TransactionTaxPickerModal
         open={!!taxPickerTxId}
@@ -1133,22 +1413,22 @@ export function TransactionsWorkspace({
         }
         onCancel={() => {
           setImportGuardOpen(false);
-          pendingImportFileRef.current = null;
+          pendingImportFilesRef.current = null;
         }}
         onSaveFirst={() => {
           setImportGuardOpen(false);
           setSaveOpen(true);
-          toast.message("After saving, choose your statement file again to import.");
+          toast.message("After saving, choose your statement file(s) again to import.");
         }}
         onDiscardAndContinue={() => {
           setImportGuardOpen(false);
-          const file = pendingImportFileRef.current;
-          pendingImportFileRef.current = null;
+          const files = pendingImportFilesRef.current;
+          pendingImportFilesRef.current = null;
           void (async () => {
             replaceBeforeNextImportRef.current = importGuardMode === "import";
             await clearTransactionsForNew();
-            if (importGuardMode === "import" && file) {
-              await onPickFile(file);
+            if (importGuardMode === "import" && files?.length) {
+              await onPickFiles(files);
             }
           })();
         }}
@@ -1182,7 +1462,9 @@ export function TransactionsWorkspace({
         onDeleted={() => setSelected(new Set())}
       />
 
-      {parseLoadingFile ? <ImportParseLoading fileName={parseLoadingFile} /> : null}
+      {parseLoadingFile ? (
+        <ImportParseLoading fileName={parseLoadingFile} statusLine={parseLoadingStatus} />
+      ) : null}
 
       {importOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
@@ -1200,23 +1482,58 @@ export function TransactionsWorkspace({
             </div>
 
             <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="mb-3 text-sm font-semibold text-slate-700">
-                Destination bank (not required beforehand)
-              </p>
+              <p className="mb-3 text-sm font-semibold text-slate-700">Destination account</p>
               {newBankName && importBankMode === "new" ? (
                 <p className="mb-2 text-xs text-slate-500">
                   Prefill from statement — edit the name if needed before importing.
                 </p>
               ) : null}
-              <div className="flex flex-wrap gap-3">
+              <Label>Statement type</Label>
+              <div
+                className="mt-1.5 flex flex-wrap gap-3"
+                role="radiogroup"
+                aria-label="Statement type"
+              >
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium has-[:checked]:border-teal-600 has-[:checked]:bg-teal-50">
+                  <input
+                    type="radio"
+                    name="importStatementType"
+                    checked={importStatementType === "BANK"}
+                    onChange={() => setImportStatementType("BANK")}
+                    className="accent-teal-700"
+                  />
+                  Bank
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium has-[:checked]:border-teal-600 has-[:checked]:bg-teal-50">
+                  <input
+                    type="radio"
+                    name="importStatementType"
+                    checked={importStatementType === "CREDIT_CARD"}
+                    onChange={() => setImportStatementType("CREDIT_CARD")}
+                    className="accent-teal-700"
+                  />
+                  Credit Card
+                </label>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">
+                Deposit / Credit → Money In · Withdrawal / Debit → Money Out
+                {importStatementType === "CREDIT_CARD"
+                  ? " (purchases = Money Out, payments = Money In)."
+                  : "."}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-3">
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="radio"
                     checked={importBankMode === "existing"}
-                    disabled={!banks.length}
-                    onChange={() => setImportBankMode("existing")}
+                    disabled={!banks.filter((b) => b.type === importStatementType).length}
+                    onChange={() => {
+                      setImportBankMode("existing");
+                      const typed = banks.filter((b) => b.type === importStatementType);
+                      if (typed[0]) setImportBankId(typed[0].id);
+                    }}
                   />
-                  Existing bank
+                  Existing account
                 </label>
                 <label className="flex items-center gap-2 text-sm">
                   <input
@@ -1224,45 +1541,60 @@ export function TransactionsWorkspace({
                     checked={importBankMode === "new"}
                     onChange={() => setImportBankMode("new")}
                   />
-                  Create new bank while importing
+                  Create new account
                 </label>
               </div>
               {importBankMode === "existing" ? (
                 <Select
                   className="mt-3"
                   value={importBankId}
-                  onChange={(e) => setImportBankId(e.target.value)}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setImportBankId(id);
+                    const bank = banks.find((b) => b.id === id);
+                    if (bank) setNewBankType(bank.type);
+                  }}
                 >
-                  {banks.map((bank) => (
-                    <option key={bank.id} value={bank.id}>
-                      {bank.name} ({bank.type === "BANK" ? "Bank" : "Credit Card"})
-                    </option>
-                  ))}
+                  {banks
+                    .filter((b) => b.type === importStatementType)
+                    .map((bank) => (
+                      <option key={bank.id} value={bank.id}>
+                        {bank.name} ({bank.type === "BANK" ? "Bank" : "Credit Card"})
+                      </option>
+                    ))}
                 </Select>
               ) : (
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <div>
-                    <Label>New bank name</Label>
-                    <Input
-                      value={newBankName}
-                      onChange={(e) => setNewBankName(e.target.value)}
-                      placeholder="RBC Chequing / Imported Statements"
-                    />
-                  </div>
-                  <div>
-                    <Label>Type</Label>
-                    <Select
-                      value={newBankType}
-                      onChange={(e) =>
-                        setNewBankType(e.target.value as "BANK" | "CREDIT_CARD")
-                      }
-                    >
-                      <option value="BANK">Bank</option>
-                      <option value="CREDIT_CARD">Credit Card</option>
-                    </Select>
-                  </div>
+                <div className="mt-3">
+                  <Label>New account name</Label>
+                  <Input
+                    value={newBankName}
+                    onChange={(e) => setNewBankName(e.target.value)}
+                    placeholder={
+                      importStatementType === "CREDIT_CARD"
+                        ? "Visa / Mastercard"
+                        : "RBC Chequing / Imported Statements"
+                    }
+                  />
                 </div>
               )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setPreviewSwapSides((v) => !v)}
+                >
+                  {previewSwapSides ? "↺ Undo Swap Debit / Credit" : "⇄ Swap Debit / Credit"}
+                </Button>
+                {previewSwapSides ? (
+                  <span className="text-xs font-medium text-teal-800">
+                    Money In ↔ Money Out flipped for this import
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-500">
+                    Use if deposits/withdrawals landed on the wrong side
+                  </span>
+                )}
+              </div>
             </div>
 
             {matrix && mapping ? (
@@ -1272,8 +1604,8 @@ export function TransactionsWorkspace({
                     [
                       ["date", "Date"],
                       ["description", "Description"],
-                      ["moneyIn", "Money In / Credit"],
-                      ["moneyOut", "Money Out / Debit"],
+                      ["moneyIn", "Money In / Deposit (Credit)"],
+                      ["moneyOut", "Money Out / Withdrawal (Debit)"],
                       ["amount", "Signed / Amount column"],
                       ["txnType", "Txn type (Withdrawal/Deposit)"],
                     ] as const
@@ -1345,7 +1677,10 @@ export function TransactionsWorkspace({
                 </div>
                 {(() => {
                   const preview = mapRowsToTransactions(matrix, mapping);
-                  const maskedSample = preview.rows
+                  const previewRows = previewSwapSides
+                    ? swapMoneySides(preview.rows)
+                    : preview.rows;
+                  const maskedSample = previewRows
                     .slice(0, 8)
                     .filter((r) => /\*{2,}/.test(r.description)).length;
                   return (
@@ -1353,13 +1688,16 @@ export function TransactionsWorkspace({
                       <p className="mt-3 text-sm text-slate-600">
                         Preview:{" "}
                         <span className="font-semibold text-teal-800">
-                          {preview.rows.length} valid
+                          {previewRows.length} valid
                         </span>
                         {preview.errors.length ? (
                           <span className="text-rose-700">
                             {" "}
                             · {preview.errors.length} skipped ({preview.errors[0]})
                           </span>
+                        ) : null}
+                        {previewSwapSides ? (
+                          <span className="text-teal-800"> · Debit/Credit swapped</span>
                         ) : null}
                       </p>
                       {maskedSample > 0 ? (
@@ -1380,7 +1718,7 @@ export function TransactionsWorkspace({
                             </tr>
                           </thead>
                           <tbody>
-                            {preview.rows.slice(0, 8).map((row, idx) => (
+                            {previewRows.slice(0, 8).map((row, idx) => (
                               <tr key={idx} className="border-t border-slate-100">
                                 <td className="px-3 py-2 whitespace-nowrap">
                                   {row.date.toISOString().slice(0, 10)}
@@ -1394,7 +1732,7 @@ export function TransactionsWorkspace({
                                 </td>
                               </tr>
                             ))}
-                            {!preview.rows.length ? (
+                            {!previewRows.length ? (
                               <tr>
                                 <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
                                   No valid rows with current column mapping.
@@ -1441,7 +1779,7 @@ export function TransactionsWorkspace({
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm text-slate-600">
-                    Ready to import <strong>{pendingRows?.length ?? 0}</strong> detected
+                    Ready to import <strong>{previewPendingRows?.length ?? 0}</strong> detected
                     transactions.
                   </p>
                   <button
@@ -1452,6 +1790,12 @@ export function TransactionsWorkspace({
                     {previewExpanded ? "Hide preview" : "Show preview"}
                   </button>
                 </div>
+                {previewSwapSides ? (
+                  <p className="mt-2 text-sm text-teal-800">
+                    Debit/Credit swapped for this import — Deposit → Money In, Withdrawal → Money
+                    Out (after flip).
+                  </p>
+                ) : null}
                 {pendingBankHint?.periodLabel ||
                 pendingBankHint?.openingBalance != null ||
                 pendingBankHint?.closingBalance != null ? (
@@ -1482,20 +1826,20 @@ export function TransactionsWorkspace({
                     )}
                   </div>
                 ) : null}
-                {pendingRows && pendingRows.length > 0 ? (
+                {previewPendingRows && previewPendingRows.length > 0 ? (
                   <p className="mt-1 text-xs text-slate-500">
-                    Parsed money in $
-                    {pendingRows.reduce((s, r) => s + (r.moneyIn || 0), 0).toFixed(2)}
+                    Money in $
+                    {previewPendingRows.reduce((s, r) => s + (r.moneyIn || 0), 0).toFixed(2)}
                     {" · "}
                     money out $
-                    {pendingRows.reduce((s, r) => s + (r.moneyOut || 0), 0).toFixed(2)}
+                    {previewPendingRows.reduce((s, r) => s + (r.moneyOut || 0), 0).toFixed(2)}
                     {" · "}
-                    deposits {pendingRows.filter((r) => r.moneyIn > 0).length}
+                    deposits {previewPendingRows.filter((r) => r.moneyIn > 0).length}
                     {" / "}
-                    withdrawals {pendingRows.filter((r) => r.moneyOut > 0).length}
+                    withdrawals {previewPendingRows.filter((r) => r.moneyOut > 0).length}
                   </p>
                 ) : null}
-                {previewExpanded && pendingRows?.length ? (
+                {previewExpanded && previewPendingRows?.length ? (
                   <div className="mt-3 max-h-72 overflow-auto rounded-xl border border-slate-200">
                     <table className="w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-50">
@@ -1508,7 +1852,7 @@ export function TransactionsWorkspace({
                         </tr>
                       </thead>
                       <tbody>
-                        {pendingRows.map((row, idx) => (
+                        {previewPendingRows.map((row, idx) => (
                           <tr key={`${row.date}-${idx}`} className="border-t border-slate-100">
                             <td className="px-3 py-1.5 text-slate-400">{idx + 1}</td>
                             <td className="px-3 py-1.5 whitespace-nowrap">

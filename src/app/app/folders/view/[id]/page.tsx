@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireOrgContext } from "@/lib/session";
-import { Button, Card } from "@/components/ui";
+import { DualScrollArea } from "@/components/dual-scroll-area";
+import { Button } from "@/components/ui";
 
 export default async function SavedConversionViewPage({
   params,
@@ -60,7 +61,7 @@ export default async function SavedConversionViewPage({
         </div>
       </div>
 
-      <Card className="overflow-x-auto">
+      <DualScrollArea className="card-table">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -87,12 +88,16 @@ export default async function SavedConversionViewPage({
                 </td>
               </tr>
             ))}
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="p-8 text-center text-slate-500">
+                  No transactions in this save.
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
-        {rows.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No transactions in this save.</p>
-        ) : null}
-      </Card>
+      </DualScrollArea>
     </div>
   );
 }

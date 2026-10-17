@@ -9,6 +9,7 @@ import {
   generateGeneralEntriesAction,
   type ActionResult,
 } from "@/app/actions/accounting";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Badge, Button, Card, Input, Label, Select } from "@/components/ui";
 
 type Entry = {
@@ -302,7 +303,7 @@ export function GeneralEntriesWorkspace({
         </Card>
       ) : null}
 
-      <Card className="overflow-hidden">
+      <DualScrollArea className="card-table">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -399,7 +400,7 @@ export function GeneralEntriesWorkspace({
             ) : null}
           </tbody>
         </table>
-      </Card>
+      </DualScrollArea>
     </div>
   );
 }

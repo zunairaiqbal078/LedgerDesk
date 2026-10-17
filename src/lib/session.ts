@@ -10,7 +10,8 @@ import { findAccountantFirmMembershipForUser } from "@/lib/org-meta";
 import { hasMinOrgRole, isSuperAdmin } from "@/lib/permissions";
 import { resolveOrganizationAccess } from "@/lib/org-access";
 
-export async function getSession() {
+/** Deduplicate session reads within a single RSC request (layout + panes). */
+export const getSession = cache(async function getSession() {
   try {
     return await auth.api.getSession({
       headers: await headers(),
@@ -25,7 +26,7 @@ export async function getSession() {
     console.error("[auth] getSession failed:", error);
     return null;
   }
-}
+});
 
 export async function requireSession() {
   const session = await getSession();

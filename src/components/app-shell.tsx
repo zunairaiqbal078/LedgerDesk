@@ -32,6 +32,7 @@ export function AppShell({
   isSuperAdmin,
   isFirmStaff,
   canManageClients,
+  canManageMyCompanies = false,
   activeOrganizationId,
   userOrganizations,
   orgRole,
@@ -48,6 +49,7 @@ export function AppShell({
   isSuperAdmin: boolean;
   isFirmStaff: boolean;
   canManageClients: boolean;
+  canManageMyCompanies?: boolean;
   canManageFirmTeam?: boolean;
   activeOrganizationId: string;
   userOrganizations: UserOrganization[];
@@ -73,6 +75,7 @@ export function AppShell({
             isSuperAdmin={isSuperAdmin}
             isFirmStaff={isFirmStaff}
             canManageClients={canManageClients}
+            canManageMyCompanies={canManageMyCompanies}
             canManageFirmTeam={canManageClients}
             activeOrganizationId={activeOrganizationId}
             userOrganizations={userOrganizations}

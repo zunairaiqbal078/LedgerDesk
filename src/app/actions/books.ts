@@ -132,13 +132,13 @@ export async function saveRuleAction(
   return { ok: true, message: "Rule saved." };
 }
 
-export async function deleteRuleAction(formData: FormData): Promise<void> {
+export async function deleteRuleAction(formData: FormData): Promise<ActionResult> {
   const { organization, session } = await requireOrgContext("BOOKKEEPER");
   const id = String(formData.get("id") ?? "");
   const existing = await prisma.rule.findFirst({
     where: { id, organizationId: organization.id },
   });
-  if (!existing) return;
+  if (!existing) return { ok: false, error: "Rule not found." };
 
   await prisma.rule.delete({ where: { id: existing.id } });
   await prisma.auditLog.create({
@@ -151,7 +151,12 @@ export async function deleteRuleAction(formData: FormData): Promise<void> {
       metadata: { name: existing.name },
     },
   });
+  if (existing.isBuiltIn) {
+    const { syncStarterRulesVisibility } = await import("@/lib/rule-visibility");
+    await syncStarterRulesVisibility(organization.id);
+  }
   revalidatePath("/app/rules");
+  return { ok: true, message: "Rule deleted." };
 }
 
 export async function toggleRuleAction(formData: FormData): Promise<void> {
@@ -191,8 +196,36 @@ export async function bulkDeleteRulesAction(formData: FormData): Promise<ActionR
   const result = await prisma.rule.deleteMany({
     where: { id: { in: ids }, organizationId: organization.id },
   });
+  const { syncStarterRulesVisibility } = await import("@/lib/rule-visibility");
+  await syncStarterRulesVisibility(organization.id);
   revalidatePath("/app/rules");
+  if (result.count === 0) {
+    return { ok: false, error: "No matching rules to delete for this client." };
+  }
   return { ok: true, count: result.count, message: `Deleted ${result.count} rules.` };
+}
+
+export async function fillMissingPredefinedRulesAction(): Promise<ActionResult> {
+  const { organization } = await requireOrgContext("BOOKKEEPER");
+  const { setOrganizationStarterRulesVisible } = await import("@/lib/org-meta");
+  await setOrganizationStarterRulesVisible(organization.id, true);
+  const { fillMissingPredefinedRules } = await import("@/lib/ensure-org-defaults");
+  const { rulesAdded } = await fillMissingPredefinedRules(prisma, organization.id);
+  revalidatePath("/app/rules");
+  revalidatePath("/app/tax-codes");
+  if (rulesAdded === 0) {
+    return {
+      ok: true,
+      count: 0,
+      message:
+        "All predefined rules are already on this client. Deleted ones can be restored from Add predefined rules.",
+    };
+  }
+  return {
+    ok: true,
+    count: rulesAdded,
+    message: `Added ${rulesAdded} predefined rule${rulesAdded === 1 ? "" : "s"} for this client.`,
+  };
 }
 
 export async function bulkEditRulesAction(
@@ -1327,6 +1360,46 @@ export async function deleteTransactionsAction(formData: FormData): Promise<Acti
   });
   revalidatePath("/app");
   return { ok: true, count: result.count, message: `Deleted ${result.count} transactions.` };
+}
+
+/** Swap Money In ↔ Money Out for selected transactions (debit/credit flip). */
+export async function swapDebitCreditAction(formData: FormData): Promise<ActionResult> {
+  const { organization, role } = await requireOrgContext("BOOKKEEPER");
+  if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
+  const ids = String(formData.get("ids") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (!ids.length) return { ok: false, error: "Select at least one transaction." };
+
+  const sources = await prisma.transaction.findMany({
+    where: { id: { in: ids }, organizationId: organization.id },
+    select: { id: true, moneyIn: true, moneyOut: true },
+  });
+  if (!sources.length) return { ok: false, error: "Transactions not found." };
+
+  await prisma.$transaction(
+    sources.map((tx) =>
+      prisma.transaction.update({
+        where: { id: tx.id },
+        data: {
+          moneyIn: tx.moneyOut,
+          moneyOut: tx.moneyIn,
+        },
+      }),
+    ),
+  );
+
+  revalidatePath("/app");
+  revalidatePath("/app/gst");
+  revalidatePath("/app/pst");
+  revalidatePath("/app/general-entries");
+  revalidatePath("/app/reconciliation");
+  return {
+    ok: true,
+    count: sources.length,
+    message: `Swapped Money In ↔ Money Out on ${sources.length} transaction${sources.length === 1 ? "" : "s"}.`,
+  };
 }
 
 export async function updateTransactionAction(formData: FormData): Promise<ActionResult> {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClientOrganizationAction, type ActionResult } from "@/app/actions/org";
@@ -27,12 +28,17 @@ type GstPeriodDraft = { name: string; startDate: string; endDate: string };
 
 export function AddClientModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const [province, setProvince] = useState("");
   const [gstPeriods, setGstPeriods] = useState<GstPeriodDraft[]>([]);
   const [state, action, pending] = useActionState<ActionResult | undefined, FormData>(
     createClientOrganizationAction,
     undefined,
   );
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (state?.ok) {
@@ -44,11 +50,11 @@ export function AddClientModal({ open, onClose }: { open: boolean; onClose: () =
     }
   }, [state, onClose, router]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4">
-      <Card className="max-h-[90vh] w-full max-w-2xl overflow-y-auto p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/50 p-4">
+      <Card className="relative z-[201] max-h-[90vh] w-full max-w-2xl overflow-y-auto p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between gap-2">
           <h2 className="font-[family-name:var(--font-display)] text-2xl font-semibold">Add Client</h2>
           <Button type="button" variant="secondary" size="sm" onClick={onClose}>
@@ -216,6 +222,7 @@ export function AddClientModal({ open, onClose }: { open: boolean; onClose: () =
           </div>
         </form>
       </Card>
-    </div>
+    </div>,
+    document.body,
   );
 }

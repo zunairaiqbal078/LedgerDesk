@@ -10,3 +10,4 @@ allowBuilds:
   unrs-resolver: true
   workerd: false
   tesseract.js: true
+  core-js: set this to true or false

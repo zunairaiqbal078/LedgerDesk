@@ -35,9 +35,7 @@ export function LoginForm() {
     <form onSubmit={onSubmit} className="space-y-4">
       {authError === "session" ? (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Your session has expired or is invalid. Please sign in again. If this keeps happening,
-          clear your browser cookies or check that the database is running (
-          <code className="text-xs">npm run db:up</code>).
+          Your session has expired or is invalid. Please sign in again. 
         </p>
       ) : null}
       {authError === "banned" ? (
@@ -86,9 +84,10 @@ const SIGNUP_COPY: Record<
   },
   client: {
     title: "My business",
-    subtitle: "For owners and bookkeepers using LedgerDesk for one company — no client switcher.",
-    orgLabel: "Business / company name",
-    orgPlaceholder: "Acme Plumbing Ltd.",
+    subtitle:
+      "Own one or more companies under the same login. Each company has separate books — hire accountants per company in Settings.",
+    orgLabel: "First company name",
+    orgPlaceholder: "Metric Ltd.",
     submit: "Create my account",
     pending: "Creating account…",
   },
@@ -96,6 +95,7 @@ const SIGNUP_COPY: Record<
 
 export function SignupForm({ initialMode = "firm" }: { initialMode?: SignupMode }) {
   const [mode, setMode] = useState<SignupMode>(initialMode);
+  const [extraCompanies, setExtraCompanies] = useState<string[]>([]);
   const [state, action, pending] = useActionState<ActionResult | undefined, FormData>(
     signupAction,
     undefined,
@@ -166,6 +166,48 @@ export function SignupForm({ initialMode = "firm" }: { initialMode?: SignupMode 
             />
           )}
         </div>
+        {mode === "client" ? (
+          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-800">More companies (optional)</p>
+              <button
+                type="button"
+                className="text-xs font-semibold text-teal-800 hover:underline"
+                onClick={() => setExtraCompanies((prev) => [...prev, ""])}
+              >
+                + Add more companies
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Each company gets its own books. You can also add more later from the sidebar.
+            </p>
+            {extraCompanies.map((name, index) => (
+              <div key={index} className="flex gap-2">
+                <Input
+                  name="additionalCompany"
+                  value={name}
+                  onChange={(e) => {
+                    const next = [...extraCompanies];
+                    next[index] = e.target.value;
+                    setExtraCompanies(next);
+                  }}
+                  placeholder={`Company ${index + 2} name`}
+                  minLength={2}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setExtraCompanies((prev) => prev.filter((_, i) => i !== index))
+                  }
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div>
           <Label htmlFor="name">Your full name</Label>
           <Input id="name" name="name" required autoComplete="name" />

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Button, Card } from "@/components/ui";
 import { deleteSavedConversionAction } from "@/app/actions/saves";
 import { LoadSavedConversionButton } from "@/components/load-saved-conversion-button";
@@ -139,38 +140,40 @@ export function FolderDetailView({
                   </div>
                 </div>
                 {open ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[640px] text-left text-sm">
-                      <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2">Date</th>
-                          <th className="px-3 py-2">Description</th>
-                          <th className="px-3 py-2">In</th>
-                          <th className="px-3 py-2">Out</th>
-                          <th className="px-3 py-2">Account</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {item.preview.map((row, i) => (
-                          <tr key={i} className="border-t border-slate-100">
-                            <td className="px-3 py-2 whitespace-nowrap">{row.date}</td>
-                            <td className="px-3 py-2">{row.description}</td>
-                            <td className="px-3 py-2">{row.moneyIn ? row.moneyIn.toFixed(2) : ""}</td>
-                            <td className="px-3 py-2">{row.moneyOut ? row.moneyOut.toFixed(2) : ""}</td>
-                            <td className="px-3 py-2">
-                              {[row.accountNumber, row.accountName].filter(Boolean).join(" — ") || "—"}
-                            </td>
-                          </tr>
-                        ))}
-                        {!item.preview.length ? (
+                  <div>
+                    <DualScrollArea className="card-table" style={{ border: "none", borderRadius: 0 }}>
+                      <table className="w-full min-w-[640px] text-left text-sm">
+                        <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                           <tr>
-                            <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                              No transactions in snapshot.
-                            </td>
+                            <th className="px-3 py-2">Date</th>
+                            <th className="px-3 py-2">Description</th>
+                            <th className="px-3 py-2">In</th>
+                            <th className="px-3 py-2">Out</th>
+                            <th className="px-3 py-2">Account</th>
                           </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {item.preview.map((row, i) => (
+                            <tr key={i} className="border-t border-slate-100">
+                              <td className="px-3 py-2 whitespace-nowrap">{row.date}</td>
+                              <td className="px-3 py-2">{row.description}</td>
+                              <td className="px-3 py-2">{row.moneyIn ? row.moneyIn.toFixed(2) : ""}</td>
+                              <td className="px-3 py-2">{row.moneyOut ? row.moneyOut.toFixed(2) : ""}</td>
+                              <td className="px-3 py-2">
+                                {[row.accountNumber, row.accountName].filter(Boolean).join(" — ") || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                          {!item.preview.length ? (
+                            <tr>
+                              <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
+                                No transactions in snapshot.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </DualScrollArea>
                     {item.count > item.preview.length ? (
                       <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
                         Showing first {item.preview.length} of {item.count}. Open{" "}

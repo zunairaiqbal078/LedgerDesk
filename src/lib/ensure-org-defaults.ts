@@ -8,6 +8,10 @@ import {
   seedOrganizationDefaults,
   splitTaxCodesByKind,
 } from "@/lib/org-defaults";
+import {
+  getOrganizationStarterRulesVisible,
+  setOrganizationStarterRulesVisible,
+} from "@/lib/org-meta";
 
 /** Per-request dedupe — layout + panes call org context more than once. */
 export const ensureOrganizationDefaultsCached = cache((organizationId: string) =>
@@ -18,11 +22,7 @@ async function organizationDefaultsAlreadyCurrent(
   client: PrismaClient,
   organizationId: string,
 ): Promise<boolean> {
-  const [sampleRule, gst25Rule, taxCodes, txNeedingSplit] = await Promise.all([
-    client.rule.findFirst({
-      where: { organizationId, name: "Meals - Tim Hortons", isBuiltIn: true },
-      select: { accountNumber: true, taxCodes: true },
-    }),
+  const [gst25Rule, taxCodes, txNeedingSplit] = await Promise.all([
     client.rule.findFirst({
       where: { organizationId, taxCodes: { has: "GST25" } },
       select: { id: true },
@@ -43,12 +43,6 @@ async function organizationDefaultsAlreadyCurrent(
 
   const taxSet = new Set(taxCodes.map((t) => t.code));
   if (DEFAULT_TAX_CODES.some((t) => !taxSet.has(t.code))) return false;
-  if (!sampleRule || sampleRule.accountNumber !== "5150") return false;
-  if (sampleRule.taxCodes.includes("GST25")) return false;
-  const mealsDefault = DEFAULT_RULES.find((r) => r.name === "Meals - Tim Hortons");
-  if (mealsDefault?.taxCodes.includes("GST2.5") && !sampleRule.taxCodes.includes("GST2.5")) {
-    return false;
-  }
   if (gst25Rule) return false;
   if (txNeedingSplit) {
     const split = splitTaxCodesByKind(txNeedingSplit.taxCodes, taxCodes);
@@ -58,19 +52,27 @@ async function organizationDefaultsAlreadyCurrent(
 }
 
 /**
- * Ensures every organization has starter tax codes, chart of accounts, and rules.
- * Safe to call repeatedly — only fills missing defaults and migrates legacy fields.
+ * Ensures every organization has starter tax codes and a General folder.
+ * Predefined rules / chart accounts are opt-in via toolbar buttons (not auto-seeded).
  */
 export async function ensureOrganizationDefaults(
   client: PrismaClient,
   organizationId: string,
 ) {
-  const [taxCount, accountCount, ruleCount, folderCount] = await Promise.all([
+  const [taxCount, ruleCount, folderCount, builtInRuleCount] = await Promise.all([
     client.taxCode.count({ where: { organizationId } }),
-    client.chartAccount.count({ where: { organizationId } }),
     client.rule.count({ where: { organizationId } }),
     client.folder.count({ where: { organizationId } }),
+    client.rule.count({ where: { organizationId, isBuiltIn: true } }),
   ]);
+
+  // Existing orgs that already had auto-seeded rules: keep them listed until user deletes them.
+  if (builtInRuleCount > 0) {
+    const visible = await getOrganizationStarterRulesVisible(organizationId);
+    if (!visible) {
+      await setOrganizationStarterRulesVisible(organizationId, true);
+    }
+  }
 
   if (taxCount === 0 && ruleCount === 0 && folderCount === 0) {
     await seedOrganizationDefaults(client, organizationId);
@@ -79,7 +81,6 @@ export async function ensureOrganizationDefaults(
 
   if (
     taxCount > 0 &&
-    ruleCount > 0 &&
     folderCount > 0 &&
     (await organizationDefaultsAlreadyCurrent(client, organizationId))
   ) {
@@ -108,75 +109,8 @@ export async function ensureOrganizationDefaults(
     });
   }
 
-  // Chart accounts: only via Add Small Business Accounts (fillMissingStarterChartAndTaxes).
-
-  // Fill / refresh predefined rules from Canada CSV (once until sample matches)
-  const existingRules = await client.rule.findMany({
-    where: { organizationId, isBuiltIn: true },
-    select: {
-      id: true,
-      name: true,
-      accountNumber: true,
-      taxCodes: true,
-      provinceTaxCodes: true,
-    },
-  });
-  const ruleByName = new Map(existingRules.map((r) => [r.name, r]));
-  const missingRules = DEFAULT_RULES.filter((r) => !ruleByName.has(r.name));
-  if (missingRules.length) {
-    await client.rule.createMany({
-      data: missingRules.map((rule) => ({
-        organizationId,
-        name: rule.name,
-        descriptionMatch: rule.descriptionMatch,
-        matchType: rule.matchType,
-        appliesTo: rule.appliesTo,
-        applyDeposit: rule.applyDeposit,
-        applyWithdrawal: rule.applyWithdrawal,
-        accountNumber: rule.accountNumber,
-        accountName: rule.accountName,
-        taxCodes: [...rule.taxCodes],
-        provinceTaxCodes: [...rule.provinceTaxCodes],
-        taxMode: rule.taxMode,
-        active: rule.active,
-        isBuiltIn: true,
-      })),
-    });
-  }
-
-  const sampleRule = ruleByName.get("Meals - Tim Hortons");
-  const needsRuleRefresh =
-    missingRules.length > 20 ||
-    !sampleRule ||
-    sampleRule.accountNumber !== "5150" ||
-    sampleRule.taxCodes.includes("GST25") ||
-    (sampleRule.taxCodes.includes("GST2.5") === false &&
-      DEFAULT_RULES.find((r) => r.name === "Meals - Tim Hortons")?.taxCodes.includes(
-        "GST2.5",
-      ));
-
-  if (needsRuleRefresh) {
-    for (const rule of DEFAULT_RULES) {
-      const existing = ruleByName.get(rule.name);
-      if (!existing) continue;
-      await client.rule.update({
-        where: { id: existing.id },
-        data: {
-          descriptionMatch: rule.descriptionMatch,
-          matchType: rule.matchType,
-          appliesTo: rule.appliesTo,
-          applyDeposit: rule.applyDeposit,
-          applyWithdrawal: rule.applyWithdrawal,
-          accountNumber: rule.accountNumber,
-          accountName: rule.accountName,
-          taxCodes: [...rule.taxCodes],
-          provinceTaxCodes: [...rule.provinceTaxCodes],
-          taxMode: rule.taxMode,
-          active: rule.active,
-        },
-      });
-    }
-  }
+  // Chart accounts: only via Add Small Business Accounts.
+  // Rules: only via Add predefined rules (fillMissingPredefinedRules).
 
   // Migrate GST25 references → GST2.5 on rules
   await client.$executeRaw`
@@ -328,4 +262,64 @@ export async function fillMissingStarterChartAndTaxes(
   }
 
   return { accountsAdded, taxesAdded };
+}
+
+/**
+ * Adds missing predefined Canada rules for this client (by rule name).
+ * Does not recreate rules the user already deleted (same name gone = re-addable).
+ */
+export async function fillMissingPredefinedRules(
+  client: PrismaClient,
+  organizationId: string,
+): Promise<{ rulesAdded: number }> {
+  // Ensure tax codes exist so rule tax dropdowns resolve
+  const existingTaxes = await client.taxCode.findMany({
+    where: { organizationId },
+    select: { code: true },
+  });
+  const taxCodes = new Set(existingTaxes.map((t) => t.code));
+  const missingTaxes = DEFAULT_TAX_CODES.filter((t) => !taxCodes.has(t.code));
+  if (missingTaxes.length) {
+    await client.taxCode.createMany({
+      data: missingTaxes.map((tax) => ({
+        organizationId,
+        code: tax.code,
+        name: tax.name,
+        rate: tax.rate,
+        kind: tax.kind,
+        province: tax.province,
+        isSystem: true,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  const existingRules = await client.rule.findMany({
+    where: { organizationId },
+    select: { name: true },
+  });
+  const existingNames = new Set(existingRules.map((r) => r.name));
+  const missingRules = DEFAULT_RULES.filter((r) => !existingNames.has(r.name));
+  if (!missingRules.length) return { rulesAdded: 0 };
+
+  const result = await client.rule.createMany({
+    data: missingRules.map((rule) => ({
+      organizationId,
+      name: rule.name,
+      descriptionMatch: rule.descriptionMatch,
+      matchType: rule.matchType,
+      appliesTo: rule.appliesTo,
+      applyDeposit: rule.applyDeposit,
+      applyWithdrawal: rule.applyWithdrawal,
+      accountNumber: rule.accountNumber,
+      accountName: rule.accountName,
+      taxCodes: [...rule.taxCodes],
+      provinceTaxCodes: [...rule.provinceTaxCodes],
+      taxMode: rule.taxMode,
+      active: rule.active,
+      isBuiltIn: true,
+    })),
+  });
+
+  return { rulesAdded: result.count };
 }

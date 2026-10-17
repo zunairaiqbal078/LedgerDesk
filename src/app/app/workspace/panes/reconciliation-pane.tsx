@@ -6,14 +6,29 @@ import { requireOrgContext } from "@/lib/session";
 export default async function ReconciliationPane() {
   const { organization, activeBank, role } = await requireOrgContext("VIEWER");
 
+  const reconSince = new Date();
+  reconSince.setUTCFullYear(reconSince.getUTCFullYear() - 3);
+
   const [transactions, history] = await Promise.all([
     activeBank
       ? prisma.transaction.findMany({
           where: {
             organizationId: organization.id,
             bankAccountId: activeBank.id,
+            date: { gte: reconSince },
           },
           orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+          take: 1500,
+          select: {
+            id: true,
+            date: true,
+            description: true,
+            moneyIn: true,
+            moneyOut: true,
+            accountName: true,
+            reconciledIn: true,
+            reconciledOut: true,
+          },
         })
       : Promise.resolve([]),
     activeBank

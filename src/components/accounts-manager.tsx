@@ -13,6 +13,7 @@ import {
   saveAccountAction,
   type ActionResult,
 } from "@/app/actions/books";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { parseAccountsFromImportMatrix } from "@/lib/accounts-import";
 import { parseImportFile } from "@/lib/import-parser";
 
@@ -351,9 +352,10 @@ export function AccountsManager({
                 : "All predefined accounts are in your chart. Bulk-delete removes them from the list until you add them again here."
               : "Click below to add the predefined chart to your accounts list for this organization. Nothing is shown in the table until you confirm."}
           </p>
-          <div
+          <DualScrollArea
             className="settings-table-wrap"
-            style={{ maxHeight: 280, marginBottom: 12, border: "1px solid var(--border)" }}
+            style={{ marginBottom: 12 }}
+            mainStyle={{ maxHeight: 280 }}
           >
             <table className="list-table" style={{ minWidth: 520 }}>
               <thead>
@@ -378,7 +380,7 @@ export function AccountsManager({
                 })}
               </tbody>
             </table>
-          </div>
+          </DualScrollArea>
           <div className="settings-paste-actions">
             <button
               type="button"
@@ -494,7 +496,7 @@ export function AccountsManager({
         </div>
       ) : null}
 
-      <div className="settings-table-wrap">
+      <DualScrollArea className="settings-table-wrap">
         <table className="list-table" style={{ minWidth: 980 }}>
           <thead>
             <tr>
@@ -612,7 +614,7 @@ export function AccountsManager({
             ) : null}
           </tbody>
         </table>
-      </div>
+      </DualScrollArea>
     </div>
   );
 }

@@ -38,14 +38,17 @@ export function canSeeLicensePanel(isSuperAdmin: boolean) {
 }
 
 /**
- * Client picker for accounting-firm staff / super admin — not for a single end-client user.
+ * Client picker: firm staff / super admin, or a hired accountant with 2+ My Business books.
+ * Solo My Business owners (1 org) do not see the switcher.
  */
 export function canSeeClientWorkspace(
   isSuperAdmin: boolean,
   isFirmStaff: boolean,
+  switchableClientCount = 0,
 ) {
   if (isSuperAdmin) return true;
-  return isFirmStaff;
+  if (isFirmStaff) return true;
+  return switchableClientCount > 1;
 }
 
 /** Constant-time compare for webhook signatures */

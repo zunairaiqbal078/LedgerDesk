@@ -15,7 +15,7 @@ export function ConverterMainTabs({ activeTab }: { activeTab: WorkspaceTabId }) 
             key={tab.id}
             href={href}
             className={cn("main-tab", active && "active")}
-            prefetch={false}
+            prefetch
           >
             {tab.label}
           </Link>

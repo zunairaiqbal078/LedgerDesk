@@ -7,6 +7,7 @@ import {
   saveReconciliationAction,
   undoReconciliationAction,
 } from "@/app/actions/accounting";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Badge, Button, Card, Input, Label } from "@/components/ui";
 
 type Tx = {
@@ -226,8 +227,8 @@ export function ReconciliationWorkspace({
         </div>
       ) : null}
 
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <DualScrollArea className="card-table">
+        <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Date</th>
@@ -288,11 +289,12 @@ export function ReconciliationWorkspace({
             ))}
           </tbody>
         </table>
-      </Card>
+      </DualScrollArea>
 
-      <Card className="overflow-hidden">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <div className="border-b border-slate-100 px-4 py-3 font-semibold">History</div>
-        <table className="w-full text-left text-sm">
+        <DualScrollArea className="card-table" style={{ border: "none", borderRadius: 0 }}>
+        <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Status</th>
@@ -363,7 +365,8 @@ export function ReconciliationWorkspace({
             ) : null}
           </tbody>
         </table>
-      </Card>
+        </DualScrollArea>
+      </div>
     </div>
   );
 }

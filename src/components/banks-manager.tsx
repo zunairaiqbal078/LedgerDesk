@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { bulkDeleteBanksAction, deleteBankAction } from "@/app/actions/org";
 import { CreateBankForm } from "@/components/bank-form";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Badge, Button, Card } from "@/components/ui";
 
 type Bank = {
@@ -122,8 +123,8 @@ export function BanksManager({
         </Card>
       ) : null}
 
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <DualScrollArea className="card-table">
+        <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               {canManage ? (
@@ -200,7 +201,7 @@ export function BanksManager({
             ) : null}
           </tbody>
         </table>
-      </Card>
+      </DualScrollArea>
     </div>
   );
 }

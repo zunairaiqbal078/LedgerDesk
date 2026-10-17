@@ -10,14 +10,9 @@ export default function HomePage() {
           <div className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
             LedgerDesk
           </div>
-          <div className="flex gap-3">
-            <Link href="/login">
-              <Button variant="secondary">Sign in</Button>
-            </Link>
-            <Link href="/signup">
-              <Button>Start free</Button>
-            </Link>
-          </div>
+          <Link href="/login">
+            <Button variant="secondary">Login</Button>
+          </Link>
         </header>
 
         <section className="flex flex-1 flex-col justify-center gap-8 py-16">
@@ -32,12 +27,12 @@ export default function HomePage() {
             access, predefined rules, GST/PST workflows, and production-grade middleware.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Link href="/signup">
-              <Button size="lg">Create your firm</Button>
-            </Link>
             <Link href="/login">
+              <Button size="lg">Login</Button>
+            </Link>
+            <Link href="/signup">
               <Button size="lg" variant="secondary">
-                Team member login
+                Signup
               </Button>
             </Link>
           </div>

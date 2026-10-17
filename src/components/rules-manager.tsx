@@ -8,13 +8,23 @@ import {
   bulkDeleteRulesAction,
   bulkEditRulesAction,
   deleteRuleAction,
+  fillMissingPredefinedRulesAction,
   importRulesBatchAction,
   saveRuleAction,
   toggleRuleAction,
   type ActionResult,
 } from "@/app/actions/books";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { parseImportFile } from "@/lib/import-parser";
 import { parseRulesFromImportMatrix } from "@/lib/rules-import";
+
+type StarterRule = {
+  name: string;
+  descriptionMatch: string;
+  accountName: string;
+  taxCodes: string[];
+  provinceTaxCodes: string[];
+};
 
 export type RuleRow = {
   id: string;
@@ -77,11 +87,15 @@ export function RulesManager({
   accounts,
   taxCodes,
   canEdit,
+  starterRules = [],
+  starterRulesVisible = false,
 }: {
   rules: RuleRow[];
   accounts: AccountOption[];
   taxCodes: TaxOption[];
   canEdit: boolean;
+  starterRules?: StarterRule[];
+  starterRulesVisible?: boolean;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -90,11 +104,26 @@ export function RulesManager({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pasteOpen, setPasteOpen] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [starterOpen, setStarterOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
     setDrafts(rules.map(toDraft));
+    const liveIds = new Set(rules.map((r) => r.id));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => liveIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
   }, [rules]);
+
+  const existingNames = useMemo(
+    () => new Set(drafts.map((d) => d.name.trim()).filter(Boolean)),
+    [drafts],
+  );
+  const missingStarterCount = useMemo(
+    () => starterRules.filter((r) => !existingNames.has(r.name)).length,
+    [starterRules, existingNames],
+  );
 
   const gstOptions = useMemo(
     () => taxCodes.filter((t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER"),
@@ -174,22 +203,38 @@ export function RulesManager({
     const row = drafts[index];
     if (!row) return;
     if (row.id && !row.isNew) {
+      if (!confirm(`Delete rule “${row.name || "Untitled"}”?`)) return;
       startTransition(async () => {
         const fd = new FormData();
         fd.set("id", row.id);
-        await deleteRuleAction(fd);
+        const result = await deleteRuleAction(fd);
+        if (!result.ok) {
+          toast.error(result.error ?? "Delete failed");
+          return;
+        }
         setDrafts((prev) => prev.filter((_, i) => i !== index));
         setSelected((prev) => {
           const next = new Set(prev);
           next.delete(row.id);
           return next;
         });
-        toast.success("Rule deleted.");
+        toast.success(result.message ?? "Rule deleted.");
         router.refresh();
       });
       return;
     }
     setDrafts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function fillPredefinedRules() {
+    startTransition(async () => {
+      const result = await fillMissingPredefinedRulesAction();
+      if (result.ok) {
+        toast.success(result.message ?? "Predefined rules added.");
+        setStarterOpen(false);
+        router.refresh();
+      } else toast.error(result.error ?? "Could not add predefined rules.");
+    });
   }
 
   function saveAll() {
@@ -249,11 +294,13 @@ export function RulesManager({
   function bulkDelete() {
     if (!selected.size) return;
     if (!confirm(`Delete ${selected.size} selected rules?`)) return;
+    const idsToDelete = new Set(selected);
     const fd = new FormData();
-    fd.set("ids", [...selected].join(","));
+    fd.set("ids", [...idsToDelete].join(","));
     startTransition(async () => {
       const result = await bulkDeleteRulesAction(fd);
       if (result.ok) {
+        setDrafts((prev) => prev.filter((row) => !row.id || !idsToDelete.has(row.id)));
         toast.success(result.message ?? "Deleted");
         setSelected(new Set());
         setBulkEditOpen(false);
@@ -293,9 +340,10 @@ export function RulesManager({
       </div>
 
       <p className="hint">
-        Predefined rules stay in your library; add or import more anytime. Description Match is required. Choose GST/HST
-        and PST codes from the dropdowns per rule. Import a CSV or Excel file to extract rules into the database, or
-        bulk-paste by column. Click Save Rules after editing the table.
+        Rules are saved for the <strong>active client</strong> only. Predefined Canada merchant rules are not listed
+        until you click <strong>Add predefined rules</strong> — then you can edit or delete them. Deleted predefined
+        rules stay gone until you add them again from that button. Description Match is required. Click Save Rules after
+        editing the table.
       </p>
 
       {canEdit ? (
@@ -307,8 +355,20 @@ export function RulesManager({
             type="button"
             className="btn-converter btn-light"
             onClick={() => {
+              setStarterOpen(true);
+              setPasteOpen(false);
+              setBulkEditOpen(false);
+            }}
+          >
+            + Add predefined rules
+          </button>
+          <button
+            type="button"
+            className="btn-converter btn-light"
+            onClick={() => {
               setPasteOpen(true);
               setBulkEditOpen(false);
+              setStarterOpen(false);
             }}
           >
             Bulk paste add
@@ -319,6 +379,69 @@ export function RulesManager({
           <button type="button" className="btn-converter btn-green" disabled={pending} onClick={saveAll}>
             {pending ? "Saving…" : "Save Rules"}
           </button>
+        </div>
+      ) : null}
+
+      {canEdit && starterOpen && starterRules.length > 0 ? (
+        <div className="settings-paste-box">
+          <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 800 }}>
+            Predefined rules ({starterRules.length})
+          </h3>
+          <p className="hint" style={{ marginBottom: 10 }}>
+            {starterRulesVisible
+              ? missingStarterCount > 0
+                ? `${missingStarterCount} predefined rule${missingStarterCount === 1 ? "" : "s"} can still be added for this client.`
+                : "All predefined rules are already on this client. Bulk-delete removes them until you add them again here."
+              : "Click below to add the predefined Canada merchant rules for this client. Nothing is shown in the table until you confirm."}
+          </p>
+          <DualScrollArea
+            className="settings-table-wrap"
+            style={{ marginBottom: 12 }}
+            mainStyle={{ maxHeight: 280 }}
+          >
+            <table className="list-table" style={{ minWidth: 640 }}>
+              <thead>
+                <tr>
+                  <th style={{ width: "28%" }}>Rule</th>
+                  <th>Match</th>
+                  <th style={{ width: "22%" }}>Category</th>
+                  <th style={{ width: 88 }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {starterRules.map((r) => {
+                  const present = existingNames.has(r.name);
+                  return (
+                    <tr key={r.name}>
+                      <td>{r.name}</td>
+                      <td style={{ fontSize: 12 }}>{r.descriptionMatch}</td>
+                      <td>{r.accountName}</td>
+                      <td>{present ? "In library" : "Missing"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </DualScrollArea>
+          <div className="settings-paste-actions">
+            <button
+              type="button"
+              className="btn-converter btn-green"
+              disabled={pending}
+              onClick={fillPredefinedRules}
+            >
+              {pending
+                ? "Adding…"
+                : starterRulesVisible
+                  ? missingStarterCount > 0
+                    ? `Add ${missingStarterCount} to this client`
+                    : "Show rules list (already complete)"
+                  : `Add predefined rules (${starterRules.length})`}
+            </button>
+            <button type="button" className="btn-converter btn-light" onClick={() => setStarterOpen(false)}>
+              Close
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -450,7 +573,7 @@ export function RulesManager({
         </div>
       ) : null}
 
-      <div className="settings-table-wrap">
+      <DualScrollArea className="settings-table-wrap">
         <table className="list-table rules-table">
           <thead>
             <tr>
@@ -657,7 +780,7 @@ export function RulesManager({
             ) : null}
           </tbody>
         </table>
-      </div>
+      </DualScrollArea>
     </div>
   );
 }

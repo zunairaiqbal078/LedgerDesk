@@ -1,14 +1,20 @@
 import { RulesManager } from "@/components/rules-manager";
 import { prisma } from "@/lib/db";
+import { DEFAULT_RULES } from "@/lib/org-defaults";
+import { getOrganizationStarterRulesVisible } from "@/lib/org-meta";
 import { hasMinOrgRole } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
 
 export default async function RulesPage() {
   const { organization, role } = await requireOrgContext("VIEWER");
+  const starterRulesVisible = await getOrganizationStarterRulesVisible(organization.id);
 
   const [rules, accounts, taxCodes] = await Promise.all([
     prisma.rule.findMany({
-      where: { organizationId: organization.id },
+      where: {
+        organizationId: organization.id,
+        ...(starterRulesVisible ? {} : { isBuiltIn: false }),
+      },
       orderBy: [{ isBuiltIn: "desc" }, { name: "asc" }],
     }),
     prisma.chartAccount.findMany({
@@ -24,6 +30,14 @@ export default async function RulesPage() {
   return (
     <RulesManager
       canEdit={hasMinOrgRole(role, "BOOKKEEPER")}
+      starterRulesVisible={starterRulesVisible}
+      starterRules={DEFAULT_RULES.map((r) => ({
+        name: r.name,
+        descriptionMatch: r.descriptionMatch,
+        accountName: r.accountName,
+        taxCodes: r.taxCodes,
+        provinceTaxCodes: r.provinceTaxCodes,
+      }))}
       accounts={accounts.map((a) => ({ number: a.number, name: a.name }))}
       taxCodes={taxCodes.map((t) => ({ code: t.code, name: t.name, kind: t.kind }))}
       rules={rules.map((rule) => ({

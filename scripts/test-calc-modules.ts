@@ -80,6 +80,15 @@ function reconCalc(opts: {
   return { calculated: round2(calculated), difference: round2(difference) };
 }
 
+/** Same as UI / import preview Swap Debit ↔ Credit. */
+function swapMoneySides<T extends { moneyIn: number; moneyOut: number }>(row: T): T {
+  return { ...row, moneyIn: row.moneyOut, moneyOut: row.moneyIn };
+}
+
+function swapAll<T extends { moneyIn: number; moneyOut: number }>(rows: T[]): T[] {
+  return rows.map(swapMoneySides);
+}
+
 async function main() {
   let failed = 0;
   const csvPath = resolve(process.cwd(), "fixtures/calc-test-transactions.csv");
@@ -1280,6 +1289,521 @@ async function main() {
     });
     failed += assertEq("signed + → moneyIn", result.rows[0]?.moneyIn ?? 0, 250) ? 0 : 1;
     failed += assertEq("signed − → moneyOut", result.rows[1]?.moneyOut ?? 0, 75.5) ? 0 : 1;
+  }
+
+  // ── E9. Swap Debit/Credit + Bank/CC — must not break GST/PST/recon ─
+  console.log("\n=== E9. Swap Debit/Credit & Bank/CC isolation ===");
+  {
+    // ── E9.1 Pure swap mechanics ────────────────────────────────────
+    failed += assertEq("swap deposit→In", swapMoneySides({ moneyIn: 0, moneyOut: 250 }).moneyIn, 250)
+      ? 0
+      : 1;
+    failed += assertEq(
+      "swap withdrawal→Out",
+      swapMoneySides({ moneyIn: 75.5, moneyOut: 0 }).moneyOut,
+      75.5,
+    )
+      ? 0
+      : 1;
+    {
+      const row = { moneyIn: 100, moneyOut: 40 };
+      const twice = swapMoneySides(swapMoneySides(row));
+      failed += assertEq("double-swap restores moneyIn", twice.moneyIn, 100) ? 0 : 1;
+      failed += assertEq("double-swap restores moneyOut", twice.moneyOut, 40) ? 0 : 1;
+    }
+    failed += assertEq(
+      "swap zeros stays zero",
+      swapMoneySides({ moneyIn: 0, moneyOut: 0 }).moneyIn +
+        swapMoneySides({ moneyIn: 0, moneyOut: 0 }).moneyOut,
+      0,
+    )
+      ? 0
+      : 1;
+
+    // Gross conserved → tax math side-agnostic on amount
+    const saleCorrect = calculateTransactionAmounts(
+      { moneyIn: 1120, moneyOut: 0, taxCodes: ["GST5"], taxMode: "INCLUSIVE" },
+      CATALOG,
+    );
+    const saleSwapped = calculateTransactionAmounts(
+      {
+        ...swapMoneySides({ moneyIn: 1120, moneyOut: 0 }),
+        taxCodes: ["GST5"],
+        taxMode: "INCLUSIVE",
+      },
+      CATALOG,
+    );
+    failed += assertEq("tax amount unchanged by swap", saleSwapped.taxAmount, saleCorrect.taxAmount)
+      ? 0
+      : 1;
+    failed += assertEq("net amount unchanged by swap", saleSwapped.netAmount, saleCorrect.netAmount)
+      ? 0
+      : 1;
+    failed += assert("side flips in→out after swap", saleCorrect.side === "in" && saleSwapped.side === "out")
+      ? 0
+      : 1;
+
+    // Summary: Σ(in)+Σ(out) conserved; each side flips
+    const batch = [
+      { moneyIn: 1120, moneyOut: 0, taxCodes: ["GST5"] as string[], taxMode: "INCLUSIVE" as const },
+      { moneyIn: 0, moneyOut: 56, taxCodes: ["GST5"] as string[], taxMode: "INCLUSIVE" as const },
+      { moneyIn: 250, moneyOut: 0, taxCodes: [] as string[], taxMode: "INCLUSIVE" as const },
+    ];
+    const sumBefore = summarizeTransactions(batch, CATALOG);
+    const sumAfter = summarizeTransactions(swapAll(batch), CATALOG);
+    failed += assertEq(
+      "summary total cash conserved",
+      sumAfter.moneyIn + sumAfter.moneyOut,
+      sumBefore.moneyIn + sumBefore.moneyOut,
+    )
+      ? 0
+      : 1;
+    failed += assertEq("summary moneyIn flips to prior out", sumAfter.moneyIn, sumBefore.moneyOut)
+      ? 0
+      : 1;
+    failed += assertEq("summary moneyOut flips to prior in", sumAfter.moneyOut, sumBefore.moneyIn)
+      ? 0
+      : 1;
+    failed += assertEq("summary tax unchanged by full swap", sumAfter.taxAmount, sumBefore.taxAmount)
+      ? 0
+      : 1;
+
+    // ── E9.2 Wrong-side import → swap restores GST roles ────────────
+    const gstPeriod = {
+      key: "M3-2025",
+      label: "2025-03",
+      start: new Date("2025-03-01T00:00:00Z"),
+      end: new Date("2025-03-31T23:59:59Z"),
+    };
+    // Sale deposited wrong as Money Out, no accountType → GST uses money side
+    const saleWrongSide: TxForTax = {
+      id: "swap-sale-wrong",
+      date: new Date("2025-03-10T12:00:00Z"),
+      description: "Client payment landed as withdrawal",
+      moneyIn: 0,
+      moneyOut: 105,
+      accountNumber: null,
+      accountName: null,
+      accountType: null,
+      taxCodes: ["GST5"],
+      provinceTaxCodes: [],
+      taxMode: "INCLUSIVE",
+    };
+    const gstWrong = calculateGstSummary([saleWrongSide], CATALOG, gstPeriod);
+    const saleFixed = { ...saleWrongSide, ...swapMoneySides(saleWrongSide) };
+    const gstFixed = calculateGstSummary([saleFixed], CATALOG, gstPeriod);
+    failed += assert(
+      "wrong-side sale is NOT taxable sale",
+      gstWrong.taxableSales === 0 && gstWrong.gstCollected === 0,
+    )
+      ? 0
+      : 1;
+    failed += assertEq("swap restores GST taxable net", gstFixed.taxableSales, 100) ? 0 : 1;
+    failed += assertEq("swap restores GST collected", gstFixed.gstCollected, 5) ? 0 : 1;
+
+    // Expense purchase wrong as Money In → ITC missing / refund-signed until swap
+    const expWrong: TxForTax = {
+      id: "swap-exp-wrong",
+      date: new Date("2025-03-11T12:00:00Z"),
+      description: "Staples purchase landed as deposit",
+      moneyIn: 56,
+      moneyOut: 0,
+      accountNumber: "5200",
+      accountName: "Office Supplies",
+      accountType: "EXPENSE",
+      taxCodes: ["GST5"],
+      provinceTaxCodes: [],
+      taxMode: "INCLUSIVE",
+    };
+    const gstExpWrong = calculateGstSummary([expWrong], CATALOG, gstPeriod);
+    const expFixed = { ...expWrong, ...swapMoneySides(expWrong) };
+    const gstExpFixed = calculateGstSummary([expFixed], CATALOG, gstPeriod);
+    // EXPENSE + moneyIn → signed ITC negative (refund direction)
+    failed += assertEq("wrong-side expense ITC is negative refund", gstExpWrong.itcPaid, -2.67)
+      ? 0
+      : 1;
+    failed += assertEq("swap restores positive ITC", gstExpFixed.itcPaid, 2.67) ? 0 : 1;
+
+    // INCOME + correct moneyIn: swap alone must NOT change GST (accountType drives sale)
+    const incomeSale: TxForTax = {
+      id: "swap-income",
+      date: new Date("2025-03-12T12:00:00Z"),
+      description: "Categorized income",
+      moneyIn: 105,
+      moneyOut: 0,
+      accountNumber: "4000",
+      accountName: "Sales Revenue",
+      accountType: "INCOME",
+      taxCodes: ["GST5"],
+      provinceTaxCodes: [],
+      taxMode: "INCLUSIVE",
+    };
+    const gstInc = calculateGstSummary([incomeSale], CATALOG, gstPeriod);
+    const gstIncSwapped = calculateGstSummary(
+      [{ ...incomeSale, ...swapMoneySides(incomeSale) }],
+      CATALOG,
+      gstPeriod,
+    );
+    // moneyOut on INCOME → sign -1 (income refund), so taxable/collected flip sign
+    failed += assertEq("INCOME+swap → refund nets taxable", gstIncSwapped.taxableSales, -gstInc.taxableSales)
+      ? 0
+      : 1;
+    failed += assertEq("INCOME+swap → refund nets GST", gstIncSwapped.gstCollected, -gstInc.gstCollected)
+      ? 0
+      : 1;
+
+    // Mixed batch: only wrong rows swapped → GST payable matches all-correct batch
+    const correctBatch: TxForTax[] = [
+      {
+        id: "b1",
+        date: new Date("2025-03-01T12:00:00Z"),
+        description: "Sale",
+        moneyIn: 105,
+        moneyOut: 0,
+        accountNumber: null,
+        accountName: null,
+        accountType: null,
+        taxCodes: ["GST5"],
+        taxMode: "INCLUSIVE",
+      },
+      {
+        id: "b2",
+        date: new Date("2025-03-02T12:00:00Z"),
+        description: "Expense",
+        moneyIn: 0,
+        moneyOut: 56,
+        accountNumber: "5200",
+        accountName: "Office Supplies",
+        accountType: "EXPENSE",
+        taxCodes: ["GST5"],
+        taxMode: "INCLUSIVE",
+      },
+    ];
+    const importedWrong: TxForTax[] = [
+      { ...correctBatch[0]!, moneyIn: 0, moneyOut: 105 },
+      { ...correctBatch[1]!, moneyIn: 56, moneyOut: 0 },
+    ];
+    const afterSelectiveSwap = [
+      { ...importedWrong[0]!, ...swapMoneySides(importedWrong[0]!) },
+      { ...importedWrong[1]!, ...swapMoneySides(importedWrong[1]!) },
+    ];
+    const gstCorrect = calculateGstSummary(correctBatch, CATALOG, gstPeriod);
+    const gstAfterSwap = calculateGstSummary(afterSelectiveSwap, CATALOG, gstPeriod);
+    failed += assertEq("GST taxable after fix-swap", gstAfterSwap.taxableSales, gstCorrect.taxableSales)
+      ? 0
+      : 1;
+    failed += assertEq("GST ITC after fix-swap", gstAfterSwap.itcPaid, gstCorrect.itcPaid) ? 0 : 1;
+    failed += assertEq("GST payable after fix-swap", gstAfterSwap.gstPayable, gstCorrect.gstPayable)
+      ? 0
+      : 1;
+
+    // ── E9.3 PST isolation ──────────────────────────────────────────
+    const pstSaleWrong: TxForTax = {
+      id: "pst-wrong",
+      date: new Date("2025-03-15T12:00:00Z"),
+      description: "BC sale wrong side",
+      moneyIn: 0,
+      moneyOut: 107,
+      accountNumber: null,
+      accountName: null,
+      accountType: null,
+      taxCodes: [],
+      provinceTaxCodes: ["BC PST7"],
+      taxMode: "INCLUSIVE",
+      province: "BC",
+    };
+    const pstWrong = calculatePstSummary([pstSaleWrong], CATALOG, gstPeriod, "BC");
+    const pstFixedRow = { ...pstSaleWrong, ...swapMoneySides(pstSaleWrong) };
+    const pstOk = calculatePstSummary([pstFixedRow], CATALOG, gstPeriod, "BC");
+    failed += assert("PST wrong-side not collected", pstWrong.pstCollected === 0) ? 0 : 1;
+    failed += assertEq("PST swap restores collected", pstOk.pstCollected, 7) ? 0 : 1;
+    failed += assertEq("PST swap restores taxable", pstOk.taxableSales, 100) ? 0 : 1;
+    failed += assertEq("PST payable = collected after swap", pstOk.pstPayable, pstOk.pstCollected)
+      ? 0
+      : 1;
+
+    // Expense with PST wrong as In → paid missing until swap
+    const pstExpWrong: TxForTax = {
+      id: "pst-exp-wrong",
+      date: new Date("2025-03-16T12:00:00Z"),
+      description: "BC purchase wrong side",
+      moneyIn: 107,
+      moneyOut: 0,
+      accountNumber: "5200",
+      accountName: "Office Supplies",
+      accountType: "EXPENSE",
+      taxCodes: [],
+      provinceTaxCodes: ["BC PST7"],
+      taxMode: "INCLUSIVE",
+      province: "BC",
+    };
+    const pstExpW = calculatePstSummary([pstExpWrong], CATALOG, gstPeriod, "BC");
+    const pstExpF = calculatePstSummary(
+      [{ ...pstExpWrong, ...swapMoneySides(pstExpWrong) }],
+      CATALOG,
+      gstPeriod,
+      "BC",
+    );
+    // moneyIn + hasPst without INCOME → falls to review (not paid) when not moneyOut
+    failed += assertEq("PST wrong-side paid stays 0", pstExpW.pstPaid, 0) ? 0 : 1;
+    failed += assertEq("PST swap restores paid", pstExpF.pstPaid, 7) ? 0 : 1;
+    // Payable still tracks collected only — unaffected by paid
+    failed += assertEq("PST payable ignores paid after swap", pstExpF.pstPayable, 0) ? 0 : 1;
+
+    // ── E9.4 Bank recon: wrong sides break balance; swap fixes ──────
+    {
+      const opening = 1000;
+      const deposit = 250;
+      const withdrawal = 75.5;
+      const statementEnding = round2(opening + deposit - withdrawal); // 1174.5
+      const wrongIn = withdrawal; // sides flipped
+      const wrongOut = deposit;
+      const broken = reconCalc({
+        type: "BANK",
+        opening,
+        statementEnding,
+        moneyIn: wrongIn,
+        moneyOut: wrongOut,
+      });
+      failed += assert(
+        "bank recon broken when sides flipped",
+        Math.abs(broken.difference) > 0.01,
+      )
+        ? 0
+        : 1;
+      const fixed = reconCalc({
+        type: "BANK",
+        opening,
+        statementEnding,
+        moneyIn: swapMoneySides({ moneyIn: wrongIn, moneyOut: wrongOut }).moneyIn,
+        moneyOut: swapMoneySides({ moneyIn: wrongIn, moneyOut: wrongOut }).moneyOut,
+      });
+      failed += assertEq("bank recon OK after swap", fixed.difference, 0) ? 0 : 1;
+      failed += assertEq("bank calculated after swap", fixed.calculated, statementEnding) ? 0 : 1;
+    }
+
+    // ── E9.5 Credit card recon: purchases Out, payments In ──────────
+    {
+      const opening = 500;
+      const purchase = 400; // Money Out
+      const payment = 150; // Money In
+      // CC: open + out − in = 500 + 400 − 150 = 750
+      const statementEnding = 750;
+      const ok = reconCalc({
+        type: "CREDIT_CARD",
+        opening,
+        statementEnding,
+        moneyIn: payment,
+        moneyOut: purchase,
+      });
+      failed += assertEq("CC recon correct sides", ok.difference, 0) ? 0 : 1;
+
+      // If import flipped (purchase as In, payment as Out) recon is wrong
+      const flipped = reconCalc({
+        type: "CREDIT_CARD",
+        opening,
+        statementEnding,
+        moneyIn: purchase,
+        moneyOut: payment,
+      });
+      failed += assert("CC recon broken when sides flipped", Math.abs(flipped.difference) > 0.01)
+        ? 0
+        : 1;
+      const restored = reconCalc({
+        type: "CREDIT_CARD",
+        opening,
+        statementEnding,
+        ...swapMoneySides({ moneyIn: purchase, moneyOut: payment }),
+      });
+      failed += assertEq("CC recon OK after swap", restored.difference, 0) ? 0 : 1;
+    }
+
+    // Bank vs CC formula isolation: same numbers, different calculated ending
+    {
+      const same = { opening: 1000, moneyIn: 200, moneyOut: 300 };
+      const bank = reconCalc({ type: "BANK", statementEnding: 0, ...same });
+      const cc = reconCalc({ type: "CREDIT_CARD", statementEnding: 0, ...same });
+      failed += assertEq("Bank formula open+in−out", bank.calculated, 900) ? 0 : 1;
+      failed += assertEq("CC formula open+out−in", cc.calculated, 1100) ? 0 : 1;
+      failed += assert(
+        "Bank/CC formulas diverge on same clears",
+        bank.calculated !== cc.calculated,
+      )
+        ? 0
+        : 1;
+      // Swapping clears then applying Bank vs CC still uses type-specific formula
+      const swapped = swapMoneySides({ moneyIn: same.moneyIn, moneyOut: same.moneyOut });
+      const bankS = reconCalc({ type: "BANK", opening: same.opening, statementEnding: 0, ...swapped });
+      const ccS = reconCalc({
+        type: "CREDIT_CARD",
+        opening: same.opening,
+        statementEnding: 0,
+        ...swapped,
+      });
+      failed += assertEq("Bank after swap open+in−out", bankS.calculated, 1100) ? 0 : 1;
+      failed += assertEq("CC after swap open+out−in", ccS.calculated, 900) ? 0 : 1;
+    }
+
+    // ── E9.6 Transfers: swap of both legs preserves amount match ────
+    {
+      const outLeg = {
+        id: "tr-out",
+        bankAccountId: "bank-a",
+        date: new Date("2025-03-20T12:00:00Z"),
+        description: "Transfer out",
+        moneyIn: 0,
+        moneyOut: 500,
+        transferMatchId: null as string | null,
+      };
+      const inLeg = {
+        id: "tr-in",
+        bankAccountId: "bank-b",
+        date: new Date("2025-03-20T12:00:00Z"),
+        description: "Transfer in",
+        moneyIn: 500,
+        moneyOut: 0,
+        transferMatchId: null as string | null,
+      };
+      const good = uniqueTransferCandidates(findTransferCandidates([outLeg, inLeg], 7));
+      failed += assertEq("transfer matches before swap", good.length, 1) ? 0 : 1;
+
+      // Swap only one leg → amounts no longer opposite → no match
+      const oneSwapped = [swapMoneySides(outLeg), inLeg];
+      const broken = uniqueTransferCandidates(findTransferCandidates(oneSwapped, 7));
+      failed += assertEq("single-leg swap breaks transfer match", broken.length, 0) ? 0 : 1;
+
+      // Swap both legs → still Matched (out↔in roles flip banks but amounts align)
+      const bothSwapped = [swapMoneySides(outLeg), swapMoneySides(inLeg)];
+      // After both swap: bank-a has moneyIn 500, bank-b has moneyOut 500 — still a pair
+      const both = uniqueTransferCandidates(findTransferCandidates(bothSwapped, 7));
+      failed += assertEq("both-leg swap still matches", both.length, 1) ? 0 : 1;
+    }
+
+    // ── E9.7 General entries: gross from moneyOut else moneyIn ──────
+    {
+      const geBase = {
+        id: "ge1",
+        date: new Date("2025-03-05T12:00:00Z"),
+        description: "Office",
+        bankAccountId: "b1",
+        bankName: "Chequing",
+        bankType: "BANK" as const,
+        accountNumber: "5200",
+        accountName: "Office Supplies",
+        taxCodes: ["GST5"],
+        taxMode: "INCLUSIVE" as const,
+        transferMatchId: null as string | null,
+      };
+      const correct = [{ ...geBase, moneyIn: 0, moneyOut: 105 }];
+      const wrong = [{ ...geBase, moneyIn: 105, moneyOut: 0 }];
+      const rateMap = new Map([["GST5", 5]]);
+      const geOk = generateAutomaticEntries(correct, {
+        taxRateByCode: rateMap,
+        periodType: "MONTHLY",
+      });
+      const geWrong = generateAutomaticEntries(wrong, {
+        taxRateByCode: rateMap,
+        periodType: "MONTHLY",
+      });
+      // Both produce a GE (gross = out or in) — amount same, but income vs expense bucket differs
+      failed += assert("GE exists for moneyOut expense", geOk.length >= 1) ? 0 : 1;
+      failed += assert("GE exists for moneyIn (wrong side) too", geWrong.length >= 1) ? 0 : 1;
+      const geFixed = generateAutomaticEntries(swapAll(wrong), {
+        taxRateByCode: rateMap,
+        periodType: "MONTHLY",
+      });
+      const balOk = geOk[0]!.lines.reduce((s, l) => s + l.debit - l.credit, 0);
+      const balFixed = geFixed[0]!.lines.reduce((s, l) => s + l.debit - l.credit, 0);
+      failed += assertEq("GE balanced before", round2(balOk), 0) ? 0 : 1;
+      failed += assertEq("GE balanced after swap fix", round2(balFixed), 0) ? 0 : 1;
+    }
+
+    // ── E9.8 Import signedRule: positiveOut vs swap equivalence ─────
+    {
+      const csv = ["Date,Description,Amount", "2025-03-01,Purchase,100.00", "2025-03-02,Payment,-50.00"].join(
+        "\n",
+      );
+      const m = parseCsvText(csv, "cc-signed.csv");
+      const asBank = mapRowsToTransactions(m, {
+        date: "Date",
+        description: "Description",
+        amount: "Amount",
+        dateFormat: "AUTO",
+        signedRule: "positiveIn",
+      });
+      // positiveIn: +100 → In, −50 → Out (wrong for CC purchases)
+      failed += assertEq("positiveIn maps + to In", asBank.rows[0]?.moneyIn ?? 0, 100) ? 0 : 1;
+      failed += assertEq("positiveIn maps − to Out", asBank.rows[1]?.moneyOut ?? 0, 50) ? 0 : 1;
+
+      const asCcRule = mapRowsToTransactions(m, {
+        date: "Date",
+        description: "Description",
+        amount: "Amount",
+        dateFormat: "AUTO",
+        signedRule: "positiveOut",
+      });
+      // positiveOut: +100 → Out (purchase), −50 → In (payment)
+      failed += assertEq("positiveOut maps + to Out", asCcRule.rows[0]?.moneyOut ?? 0, 100) ? 0 : 1;
+      failed += assertEq("positiveOut maps − to In", asCcRule.rows[1]?.moneyIn ?? 0, 50) ? 0 : 1;
+
+      // Manual swap of positiveIn rows ≈ positiveOut mapping
+      const swappedFromBank = swapAll(
+        asBank.rows.map((r) => ({ moneyIn: r.moneyIn, moneyOut: r.moneyOut })),
+      );
+      failed += assertEq(
+        "swap(positiveIn) ≈ positiveOut row0 out",
+        swappedFromBank[0]!.moneyOut,
+        asCcRule.rows[0]!.moneyOut,
+      )
+        ? 0
+        : 1;
+      failed += assertEq(
+        "swap(positiveIn) ≈ positiveOut row1 in",
+        swappedFromBank[1]!.moneyIn,
+        asCcRule.rows[1]!.moneyIn,
+      )
+        ? 0
+        : 1;
+
+      // CC recon after positiveOut (or equivalent swap) balances
+      const ccIn = asCcRule.rows.reduce((s, r) => s + r.moneyIn, 0);
+      const ccOut = asCcRule.rows.reduce((s, r) => s + r.moneyOut, 0);
+      const opening = 200;
+      const ending = opening + ccOut - ccIn; // 200+100-50 = 250
+      const r = reconCalc({
+        type: "CREDIT_CARD",
+        opening,
+        statementEnding: ending,
+        moneyIn: ccIn,
+        moneyOut: ccOut,
+      });
+      failed += assertEq("CC recon after positiveOut import", r.difference, 0) ? 0 : 1;
+    }
+
+    // ── E9.9 Bank type switch does not auto-mutate amounts ──────────
+    {
+      // Same cleared amounts: switching type changes formula only, not in/out totals
+      const moneyIn = 120;
+      const moneyOut = 80;
+      const bankEnd = reconCalc({
+        type: "BANK",
+        opening: 1000,
+        statementEnding: 1040,
+        moneyIn,
+        moneyOut,
+      });
+      const ccEnd = reconCalc({
+        type: "CREDIT_CARD",
+        opening: 1000,
+        statementEnding: 960,
+        moneyIn,
+        moneyOut,
+      });
+      failed += assertEq("type=Bank ending", bankEnd.calculated, 1040) ? 0 : 1;
+      failed += assertEq("type=CC ending", ccEnd.calculated, 960) ? 0 : 1;
+      failed += assertEq("type switch leaves moneyIn alone", moneyIn, 120) ? 0 : 1;
+      failed += assertEq("type switch leaves moneyOut alone", moneyOut, 80) ? 0 : 1;
+    }
   }
 
   // ── E8. Period builder edges ───────────────────────────────────────

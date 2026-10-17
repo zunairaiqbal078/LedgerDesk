@@ -12,6 +12,7 @@ import {
   saveTaxCodeAction,
   type ActionResult,
 } from "@/app/actions/books";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { CANADIAN_PROVINCES } from "@/lib/canada-provinces";
 import { parseImportFile } from "@/lib/import-parser";
 import { parseTaxCodesFromImportMatrix } from "@/lib/tax-codes-import";
@@ -377,7 +378,7 @@ export function TaxCodesManager({
         </div>
       ) : null}
 
-      <div className="settings-table-wrap">
+      <DualScrollArea className="settings-table-wrap">
         <table className="list-table">
           <thead>
             <tr>
@@ -472,7 +473,7 @@ export function TaxCodesManager({
             ))}
           </tbody>
         </table>
-      </div>
+      </DualScrollArea>
     </div>
   );
 }

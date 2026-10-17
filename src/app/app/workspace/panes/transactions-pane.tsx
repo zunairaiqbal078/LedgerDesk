@@ -28,19 +28,37 @@ export default async function TransactionsPane({
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 500,
-      include: { bankAccount: true },
+      select: {
+        id: true,
+        bankAccountId: true,
+        date: true,
+        description: true,
+        moneyIn: true,
+        moneyOut: true,
+        accountNumber: true,
+        accountName: true,
+        province: true,
+        taxCodes: true,
+        provinceTaxCodes: true,
+        taxMode: true,
+        notes: true,
+        bankAccount: { select: { name: true, type: true } },
+      },
     }),
     prisma.chartAccount.findMany({
       where: { organizationId: organization.id },
       orderBy: { number: "asc" },
+      select: { number: true, name: true },
     }),
     prisma.taxCode.findMany({
       where: { organizationId: organization.id },
       orderBy: { code: "asc" },
+      select: { code: true, name: true, rate: true, kind: true, province: true },
     }),
     prisma.folder.findMany({
       where: { organizationId: organization.id },
       orderBy: { name: "asc" },
+      select: { id: true, name: true },
     }),
   ]);
 

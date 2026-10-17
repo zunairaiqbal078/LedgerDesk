@@ -3,6 +3,7 @@ import {
   confirmTransferAction,
   unmatchTransferAction,
 } from "@/app/actions/accounting";
+import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Badge, Button, Card } from "@/components/ui";
 import { prisma } from "@/lib/db";
 import { canEditTransactions } from "@/lib/permissions";
@@ -17,22 +18,59 @@ export default async function TransfersPane({
   const { organization, role } = await requireOrgContext("VIEWER");
   const canEdit = canEditTransactions(role);
 
+  // Only unmatched legs with an amount — matching is O(outs×ins)
+  const since = new Date();
+  since.setUTCFullYear(since.getUTCFullYear() - 2);
+
   const [transactions, banks, confirmed] = await Promise.all([
     prisma.transaction.findMany({
-      where: { organizationId: organization.id },
-      include: { bankAccount: true },
+      where: {
+        organizationId: organization.id,
+        transferMatchId: null,
+        date: { gte: since },
+        OR: [{ moneyIn: { gt: 0 } }, { moneyOut: { gt: 0 } }],
+      },
+      select: {
+        id: true,
+        date: true,
+        description: true,
+        moneyIn: true,
+        moneyOut: true,
+        bankAccountId: true,
+        transferMatchId: true,
+        bankAccount: { select: { id: true, name: true } },
+      },
+      orderBy: { date: "desc" },
+      take: 2000,
     }),
     prisma.bankAccount.findMany({
       where: { organizationId: organization.id },
+      select: { id: true, name: true },
     }),
     prisma.transferMatch.findMany({
       where: { organizationId: organization.id },
       orderBy: { confirmedAt: "desc" },
+      take: 100,
     }),
   ]);
 
   const bankName = new Map(banks.map((b) => [b.id, b.name]));
-  const txMap = new Map(transactions.map((t) => [t.id, t]));
+
+  const confirmedTxIds = [
+    ...new Set(confirmed.flatMap((m) => [m.fromTransactionId, m.toTransactionId])),
+  ];
+  const confirmedTxs =
+    confirmedTxIds.length > 0
+      ? await prisma.transaction.findMany({
+          where: { id: { in: confirmedTxIds }, organizationId: organization.id },
+          select: {
+            id: true,
+            date: true,
+            bankAccountId: true,
+          },
+        })
+      : [];
+  const txMap = new Map(confirmedTxs.map((t) => [t.id, t]));
 
   const candidates = findTransferCandidates(
     transactions.map((tx) => ({
@@ -79,7 +117,7 @@ export default async function TransfersPane({
         </div>
       </div>
 
-      <div className="table-wrap">
+      <DualScrollArea className="table-wrap">
         <table className="tx-table list-table">
           <thead>
             <tr>
@@ -118,9 +156,9 @@ export default async function TransfersPane({
             ))}
           </tbody>
         </table>
-      </div>
+      </DualScrollArea>
 
-      <div className="table-wrap">
+      <DualScrollArea className="table-wrap">
         <table className="tx-table">
           <thead>
             <tr>
@@ -161,7 +199,7 @@ export default async function TransfersPane({
             })}
           </tbody>
         </table>
-      </div>
+      </DualScrollArea>
     </div>
   );
 }

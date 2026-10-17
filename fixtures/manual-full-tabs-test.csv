@@ -1,0 +1,39 @@
+Date,Description,Money In,Money Out,Account Number,Account Name,Notes
+2025-03-01,Client invoice payment ABC Ltd GST inclusive,1120.00,0,4000,Sales / Revenue,GST — taxable sale $1120 incl GST5
+2025-03-02,Office supplies Staples GST inclusive,0,56.00,5160,Office Supplies,GST ITC — expense $56 incl GST5
+2025-03-03,Consulting revenue exclusive GST,1000.00,0,4010,Service Revenue,GST — set Tax Treatment EXCLUSIVE then GST5
+2025-03-04,Meals Tim Hortons GST 2.5,0,21.00,5150,Meals & Entertainment,GST ITC — meals GST2.5 (rules may auto-apply)
+2025-03-05,BC sale with GST and PST inclusive,112.00,0,4000,Sales / Revenue,GST+PST — assign GST5 + BC PST7 inclusive
+2025-03-06,Transfer to Visa ****1234,0,500.00,,,TRANSFER MATCH — Bank out; pair with next row on CC account
+2025-03-07,Transfer from Chequing,500.00,0,,,TRANSFER MATCH — import this onto Credit Card bank
+2025-03-08,CRA GST remittance payment,0,200.00,2200,GST/HST Payable,GST EXCLUDE — remittance must not inflate ITC
+2025-03-09,Untaxed income deposit no tax code,250.00,0,4000,Sales / Revenue,GST — non-taxable / review (tax NONE)
+2025-03-10,Computer equipment purchase asset GST,0,525.00,1610,Computer & IT Equipment,GST ITC — asset purchase
+2025-03-11,Petro Canada fuel GST,0,84.00,5130,Vehicle - Fuel,GE + GST ITC
+2025-03-12,Client deposit DEF Corp,2100.00,0,4000,Sales / Revenue,RECON — clear Money In
+2025-03-13,Rent payment March,0,2100.00,5210,Rent & Occupancy,RECON + GE — clear Money Out
+2025-03-14,BC retail purchase with PST,0,107.00,5160,Office Supplies,PST paid ref — assign BC PST7
+2025-03-15,BC taxable product sale,214.00,0,4020,Product Sales,PST collected — GST5 + BC PST7
+2025-03-16,Ambiguous transfer A to Savings,0,300.00,,,TRANSFER EDGE — two $300 outs (not unique)
+2025-03-17,Ambiguous transfer B to Savings,0,300.00,,,TRANSFER EDGE — second $300 out
+2025-03-18,Transfer into Savings from Ops,300.00,0,,,TRANSFER EDGE — only one $300 in
+2025-03-19,Software subscription Adobe,0,52.50,5170,Software & Subscriptions,GE + GST ITC
+2025-03-20,Sales refund customer credit,0,105.00,4100,Sales Returns & Refunds,GST — income refund nets sales
+2025-03-21,Supplier refund Staples credit,105.00,0,5160,Office Supplies,GST — expense refund nets ITC
+2025-03-22,Owner draw personal,0,400.00,5470,Transfer / Review,GE / recon review
+2025-03-23,Interest income bank,12.50,0,4090,Other Operating Revenue,RECON pennies — money in
+2025-03-24,Bank service fee,0,4.50,5110,Bank Charges,RECON pennies — money out
+2025-03-25,Ontario style sale HST13,113.00,0,4010,Service Revenue,Optional — assign HST13 inclusive
+2025-03-26,Transfer Ops to CC payment thank you,0,750.00,,,TRANSFER — bank pays CC
+2025-03-27,PAYMENT THANK YOU - VISA,750.00,0,,,TRANSFER — import on Credit Card account
+2025-03-28,Advertising Facebook ads,0,210.00,5100,Advertising & Promotion,GE + GST ITC
+2025-03-29,Cash sale untaxed market stall,80.00,0,4020,Product Sales,Non-taxable style (NONE)
+2025-03-30,Quarter-end catch-up invoice,1680.00,0,4000,Sales / Revenue,GST — another March sale for period boxes
+2025-04-01,April opener sale next GST month,525.00,0,4000,Sales / Revenue,Monthly GST box — April
+2025-04-02,April office supplies,0,42.00,5160,Office Supplies,Monthly GST ITC — April
+2025-04-15,Transfer Ops to Payroll clearing,0,1200.00,,,TRANSFER — April same-day pair
+2025-04-15,Transfer into Payroll clearing,1200.00,0,,,TRANSFER — April same-day pair
+2025-05-01,May consulting sale,840.00,0,4010,Service Revenue,Quarterly Q2 sample sale
+2025-05-10,May utilities,0,157.50,5190,Utilities,GE + ITC May
+2025-06-01,June product sale BC,535.00,0,4020,Product Sales,PST+GST June — assign GST5 + BC PST7
+2025-06-20,June meals client lunch,0,63.00,5150,Meals & Entertainment,Meals GST2.5 June

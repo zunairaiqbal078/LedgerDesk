@@ -107,7 +107,85 @@ async function registerUserAndOrganization(input: {
     },
   });
 
-  return { ok: true as const };
+  return {
+    ok: true as const,
+    userId: result.user.id,
+    organizationId: organization.id,
+  };
+}
+
+/** Extra solo CLIENT company owned by an existing My Business user (no firm parent). */
+async function createSoloClientCompanyForUser(input: {
+  userId: string;
+  companyName: string;
+  setActive?: boolean;
+  auditAction?: string;
+}) {
+  const baseSlug = slugify(input.companyName) || "company";
+  let slug = baseSlug;
+  let attempt = 1;
+  while (await prisma.organization.findUnique({ where: { slug } })) {
+    attempt += 1;
+    slug = `${baseSlug}-${attempt}`;
+  }
+
+  const organization = await prisma.organization.create({
+    data: {
+      name: input.companyName,
+      slug,
+      kind: "CLIENT",
+      firmOrganizationId: null,
+      members: {
+        create: {
+          userId: input.userId,
+          role: "OWNER",
+        },
+      },
+    },
+  });
+
+  await seedOrganizationDefaults(prisma, organization.id);
+
+  if (input.setActive !== false) {
+    await prisma.userPreference.upsert({
+      where: { userId: input.userId },
+      create: {
+        userId: input.userId,
+        activeOrganizationId: organization.id,
+      },
+      update: {
+        activeOrganizationId: organization.id,
+        activeBankAccountId: null,
+      },
+    });
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: organization.id,
+      actorId: input.userId,
+      action: input.auditAction ?? "company.created",
+      entityType: "Organization",
+      entityId: organization.id,
+      metadata: { companyName: input.companyName, accountType: "client" },
+    },
+  });
+
+  return organization;
+}
+
+async function userOwnsSoloMyBusiness(userId: string) {
+  return prisma.membership.findFirst({
+    where: {
+      userId,
+      role: "OWNER",
+      organization: {
+        kind: "CLIENT",
+        firmOrganizationId: null,
+      },
+    },
+    select: { id: true },
+  });
 }
 
 function signupErrorResult(error: unknown): ActionResult {
@@ -183,6 +261,11 @@ export async function signupClientAction(
   }
 
   const { businessName, name, email, password } = parsed.data;
+  const extraNames = formData
+    .getAll("additionalCompany")
+    .map((v) => String(v).trim())
+    .filter((v) => v.length >= 2)
+    .filter((v) => v.toLowerCase() !== businessName.toLowerCase());
 
   try {
     const result = await registerUserAndOrganization({
@@ -195,11 +278,69 @@ export async function signupClientAction(
       auditMetadata: { businessName, accountType: "client" },
     });
     if (!result.ok) return result;
+
+    for (const companyName of extraNames) {
+      await createSoloClientCompanyForUser({
+        userId: result.userId,
+        companyName,
+        setActive: false,
+        auditAction: "company.created_at_signup",
+      });
+    }
   } catch (error) {
     return signupErrorResult(error);
   }
 
   redirect("/app");
+}
+
+const myBusinessCompanySchema = z.object({
+  name: z.string().min(2).max(120),
+  province: z.string().max(8).optional(),
+});
+
+/** My Business owner — add another isolated company under the same login. */
+export async function createMyBusinessCompanyAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireSession();
+  const owns = await userOwnsSoloMyBusiness(session.user.id);
+  if (!owns) {
+    return {
+      ok: false,
+      error: "Only a My Business owner can add another company.",
+    };
+  }
+
+  const parsed = myBusinessCompanySchema.safeParse({
+    name: formData.get("name"),
+    province: String(formData.get("province") ?? "").trim() || undefined,
+  });
+  if (!parsed.success) {
+    return { ok: false, error: "Please enter a valid company name." };
+  }
+
+  const provinceRaw = parsed.data.province ? normalizeProvince(parsed.data.province) : "";
+
+  const organization = await createSoloClientCompanyForUser({
+    userId: session.user.id,
+    companyName: parsed.data.name,
+    setActive: true,
+  });
+
+  if (provinceRaw) {
+    await prisma.organization.update({
+      where: { id: organization.id },
+      data: { defaultProvince: provinceRaw },
+    });
+  }
+
+  revalidatePath("/app");
+  return {
+    ok: true,
+    message: `Company “${parsed.data.name}” created. Books stay separate from your other companies. Hire accountants per company in Settings.`,
+  };
 }
 
 const teamMemberSchema = z.object({
@@ -359,6 +500,191 @@ export async function removeTeamMemberAction(formData: FormData): Promise<void> 
       entityId: membership.id,
     },
   });
+}
+
+const hireAccountantSchema = z.object({
+  name: z.string().min(2).max(120),
+  email: z.string().email(),
+  password: z.string().max(128).optional(),
+  role: z.enum(["ADMIN", "BOOKKEEPER", "VIEWER"]).default("BOOKKEEPER"),
+});
+
+/** My Business (solo CLIENT) only — create or link an accountant membership. */
+export async function hireAccountantAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const { session, organization, role } = await requireOrgContext("ADMIN");
+  if (organization.kind !== "CLIENT" || organization.firmOrganizationId) {
+    return {
+      ok: false,
+      error: "Hire accountant is only available on a My Business (individual) account.",
+    };
+  }
+  if (!canManageTeam(role)) {
+    return { ok: false, error: "Only the business owner/admin can hire an accountant." };
+  }
+
+  const rawPassword = String(formData.get("password") ?? "").trim();
+  const parsed = hireAccountantSchema.safeParse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    password: rawPassword || undefined,
+    role: formData.get("role") || "BOOKKEEPER",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: "Invalid accountant details." };
+  }
+
+  const email = parsed.data.email.toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email } });
+
+  if (existing) {
+    const alreadyMember = await prisma.membership.findUnique({
+      where: {
+        organizationId_userId: {
+          organizationId: organization.id,
+          userId: existing.id,
+        },
+      },
+    });
+    if (alreadyMember) {
+      return { ok: false, error: "This accountant is already linked to your business." };
+    }
+
+    await prisma.membership.create({
+      data: {
+        organizationId: organization.id,
+        userId: existing.id,
+        role: parsed.data.role,
+        createdById: session.user.id,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        organizationId: organization.id,
+        actorId: session.user.id,
+        action: "accountant.hired",
+        entityType: "User",
+        entityId: existing.id,
+        metadata: { email, role: parsed.data.role, linkedExisting: true },
+      },
+    });
+
+    revalidatePath("/app/settings");
+    revalidatePath("/app");
+    return {
+      ok: true,
+      message: `Linked existing accountant ${email}. They sign in with their current password. If they manage multiple businesses, they can switch in the sidebar.`,
+    };
+  }
+
+  if (!parsed.data.password || parsed.data.password.length < 10) {
+    return {
+      ok: false,
+      error: "Password is required for a new accountant (min 10 characters).",
+    };
+  }
+
+  const user = await prisma.user.create({
+    data: {
+      name: parsed.data.name,
+      email,
+      emailVerified: true,
+      globalRole: "USER",
+    },
+  });
+
+  const hashed = await hashPassword(parsed.data.password);
+  await prisma.account.create({
+    data: {
+      userId: user.id,
+      accountId: user.id,
+      providerId: "credential",
+      password: hashed,
+    },
+  });
+
+  await prisma.membership.create({
+    data: {
+      organizationId: organization.id,
+      userId: user.id,
+      role: parsed.data.role,
+      createdById: session.user.id,
+    },
+  });
+
+  await prisma.userPreference.create({
+    data: {
+      userId: user.id,
+      activeOrganizationId: organization.id,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: organization.id,
+      actorId: session.user.id,
+      action: "accountant.hired",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { email, role: parsed.data.role, linkedExisting: false },
+    },
+  });
+
+  revalidatePath("/app/settings");
+  return {
+    ok: true,
+    message: `Accountant created. Share ${email} and the password you set — they can sign in at Login.`,
+  };
+}
+
+export async function updateHiredAccountantRoleAction(formData: FormData): Promise<void> {
+  const { session, organization, role } = await requireOrgContext("ADMIN");
+  if (organization.kind !== "CLIENT" || organization.firmOrganizationId) return;
+  if (!canManageTeam(role)) return;
+
+  const memberId = String(formData.get("memberId") ?? "");
+  const nextRole = String(formData.get("role") ?? "") as "ADMIN" | "BOOKKEEPER" | "VIEWER";
+  if (!["ADMIN", "BOOKKEEPER", "VIEWER"].includes(nextRole)) return;
+
+  const membership = await prisma.membership.findFirst({
+    where: { id: memberId, organizationId: organization.id },
+  });
+  if (!membership || membership.role === "OWNER") return;
+  if (membership.userId === session.user.id) return;
+
+  await prisma.membership.update({
+    where: { id: membership.id },
+    data: { role: nextRole },
+  });
+  revalidatePath("/app/settings");
+}
+
+export async function removeHiredAccountantAction(formData: FormData): Promise<void> {
+  const { session, organization, role } = await requireOrgContext("ADMIN");
+  if (organization.kind !== "CLIENT" || organization.firmOrganizationId) return;
+  if (!canManageTeam(role)) return;
+
+  const memberId = String(formData.get("memberId") ?? "");
+  const membership = await prisma.membership.findFirst({
+    where: { id: memberId, organizationId: organization.id },
+  });
+  if (!membership || membership.role === "OWNER") return;
+  if (membership.userId === session.user.id) return;
+
+  await prisma.membership.delete({ where: { id: membership.id } });
+  await prisma.auditLog.create({
+    data: {
+      organizationId: organization.id,
+      actorId: session.user.id,
+      action: "accountant.removed",
+      entityType: "Membership",
+      entityId: membership.id,
+    },
+  });
+  revalidatePath("/app/settings");
 }
 
 const bankSchema = z.object({

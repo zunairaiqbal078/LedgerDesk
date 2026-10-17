@@ -184,6 +184,8 @@ model Organization {
   dateFormat     String  @default("YYYY-MM-DD")
   /** When false, predefined (starter) COA rows are hidden until user clicks Add Small Business Accounts. */
   starterChartVisible Boolean @default(false)
+  /** When false, predefined rules are hidden until user clicks Add predefined rules. */
+  starterRulesVisible Boolean @default(false)
 
   members          Membership[]
   banks            BankAccount[]

@@ -6,6 +6,7 @@ import {
 } from "@/lib/canada-defaults.generated";
 
 export { DEFAULT_CHART_ACCOUNTS, DEFAULT_RULES, DEFAULT_TAX_CODES };
+// DEFAULT_RULES kept in re-export for “Add predefined rules” UI / fill helper.
 export {
   isProvinceTaxKind,
   isSalesTaxKind,
@@ -30,24 +31,7 @@ export async function seedOrganizationDefaults(
     skipDuplicates: true,
   });
 
-  await prisma.rule.createMany({
-    data: DEFAULT_RULES.map((rule) => ({
-      organizationId,
-      name: rule.name,
-      descriptionMatch: rule.descriptionMatch,
-      matchType: rule.matchType,
-      appliesTo: rule.appliesTo,
-      applyDeposit: rule.applyDeposit,
-      applyWithdrawal: rule.applyWithdrawal,
-      accountNumber: rule.accountNumber,
-      accountName: rule.accountName,
-      taxCodes: [...rule.taxCodes],
-      provinceTaxCodes: [...rule.provinceTaxCodes],
-      taxMode: rule.taxMode,
-      active: rule.active,
-      isBuiltIn: true,
-    })),
-  });
+  // Predefined rules are opt-in via “Add predefined rules” (per client), like starter accounts.
 
   await prisma.folder.create({
     data: {

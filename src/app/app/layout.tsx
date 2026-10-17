@@ -43,6 +43,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/login?error=org-disabled");
   }
 
+  const canManageMyCompanies =
+    !isFirmStaff &&
+    !isSuperAdmin(globalRole) &&
+    context.organization.kind === "CLIENT" &&
+    !context.organization.firmOrganizationId &&
+    hasMinOrgRole(context.role as OrgRole, "OWNER");
+
   return (
     <AppShell
       orgName={context.organization.name}
@@ -53,6 +60,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       isSuperAdmin={isSuperAdmin(globalRole)}
       isFirmStaff={isFirmStaff}
       canManageClients={canManageClients}
+      canManageMyCompanies={canManageMyCompanies}
       activeOrganizationId={context.organization.id}
       userOrganizations={clientOrganizations}
       orgRole={context.role as OrgRole}

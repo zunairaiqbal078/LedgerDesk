@@ -48,6 +48,26 @@ export async function setOrganizationStarterChartVisible(
   `;
 }
 
+export async function getOrganizationStarterRulesVisible(
+  organizationId: string,
+): Promise<boolean> {
+  const rows = await prisma.$queryRaw<Array<{ starterRulesVisible: boolean }>>(Prisma.sql`
+    SELECT "starterRulesVisible" FROM "Organization" WHERE id = ${organizationId} LIMIT 1
+  `);
+  return rows[0]?.starterRulesVisible ?? false;
+}
+
+export async function setOrganizationStarterRulesVisible(
+  organizationId: string,
+  visible: boolean,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "Organization"
+    SET "starterRulesVisible" = ${visible}
+    WHERE id = ${organizationId}
+  `;
+}
+
 export async function getOrganizationFirmParentId(
   organizationId: string,
 ): Promise<string | null> {
