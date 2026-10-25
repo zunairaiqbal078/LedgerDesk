@@ -290,6 +290,10 @@
   border-radius: 10px;
   overflow: hidden;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 220px);
+  min-height: 280px;
 }
 
 .converter-app .dual-scroll-toolbar {
@@ -342,9 +346,22 @@
   cursor: default;
 }
 
-.converter-app .dual-scroll-top::-webkit-scrollbar,
-.converter-app .dual-scroll-main::-webkit-scrollbar {
+.converter-app .dual-scroll-top::-webkit-scrollbar {
   height: 12px;
+}
+
+.converter-app .dual-scroll-main::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.converter-app .dual-scroll-main::-webkit-scrollbar-thumb {
+  background: #b7c9d6;
+  border-radius: 8px;
+}
+
+.converter-app .dual-scroll-main::-webkit-scrollbar-track {
+  background: #eef3f7;
 }
 
 .converter-app .dual-scroll-spacer {
@@ -353,7 +370,9 @@
 }
 
 .converter-app .dual-scroll-main {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .converter-app .dual-scroll.card-table {
@@ -361,15 +380,24 @@
   border-radius: 12px;
   overflow: hidden;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 640px);
 }
 
 .converter-app .dual-scroll.card-table > .dual-scroll-main {
-  max-height: min(70vh, 640px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .converter-app .table-wrap > .dual-scroll-main,
 .converter-app .dual-scroll.table-wrap > .dual-scroll-main {
-  max-height: calc(100vh - 254px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: auto;
 }
 
 .converter-app .tx-table {

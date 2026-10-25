@@ -27,7 +27,6 @@ export default async function TransactionsPane({
         ...(activeBank ? { bankAccountId: activeBank.id } : {}),
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-      take: 500,
       select: {
         id: true,
         bankAccountId: true,
