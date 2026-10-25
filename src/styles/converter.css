@@ -292,13 +292,54 @@
   background: #fff;
 }
 
+.converter-app .dual-scroll-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: #f3f7fa;
+  padding: 2px 4px;
+}
+
 .converter-app .dual-scroll-top {
   overflow-x: auto;
   overflow-y: hidden;
   height: 14px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+}
+
+.converter-app .dual-scroll-arrow {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--line);
-  background: #f3f7fa;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #27485e;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+  user-select: none;
+}
+
+.converter-app .dual-scroll-arrow:hover:not(:disabled) {
+  background: #e8f1f7;
+  border-color: #b7c9d6;
+  color: #0f4c81;
+}
+
+.converter-app .dual-scroll-arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .converter-app .dual-scroll-top::-webkit-scrollbar,

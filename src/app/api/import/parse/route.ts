@@ -193,7 +193,17 @@ export async function POST(request: Request) {
                 source,
               });
             }
-            return NextResponse.json({ error: message }, { status: 500 });
+            // Soft fail so the client can fall back to browser OCR on scanned PDFs.
+            return NextResponse.json(
+              {
+                error: message,
+                rows: [],
+                source: "openai-failed",
+                fileName: file.name,
+                format: "pdf",
+              },
+              { status: 422 },
+            );
           }
         }
 

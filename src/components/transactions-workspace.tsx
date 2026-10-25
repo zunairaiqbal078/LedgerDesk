@@ -474,14 +474,13 @@ export function TransactionsWorkspace({
     const body = new FormData();
     body.set("file", file);
     const res = await fetch("/api/import/parse", { method: "POST", body });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error ?? "Parse failed");
-    return json as {
-      rows: PendingRows;
+    let json: {
+      rows?: PendingRows;
       errors?: string[];
       warnings?: string[];
-      fileName: string;
-      format: string;
+      error?: string;
+      fileName?: string;
+      format?: string;
       source?: string;
       bankHint?: {
         institutionName: string | null;
@@ -494,6 +493,37 @@ export function TransactionsWorkspace({
         totalDeposits?: number | null;
         periodLabel?: string | null;
       } | null;
+    } = {};
+    try {
+      json = await res.json();
+    } catch {
+      throw new Error(res.ok ? "Parse failed" : `Parse failed (${res.status})`);
+    }
+
+    // Soft failures (scanned PDF / AI unavailable) return empty rows so OCR fallback can run.
+    if (!res.ok && !json.rows?.length) {
+      if (res.status === 422 || res.status === 500) {
+        return {
+          rows: [] as PendingRows,
+          errors: [json.error ?? "Parse found no transactions"],
+          warnings: json.warnings,
+          fileName: json.fileName ?? file.name,
+          format: json.format ?? "pdf",
+          source: json.source,
+          bankHint: json.bankHint ?? null,
+        };
+      }
+      throw new Error(json.error ?? "Parse failed");
+    }
+
+    return {
+      rows: json.rows ?? [],
+      errors: json.errors,
+      warnings: json.warnings,
+      fileName: json.fileName ?? file.name,
+      format: json.format ?? "unknown",
+      source: json.source,
+      bankHint: json.bankHint ?? null,
     };
   }
 
@@ -1004,17 +1034,26 @@ export function TransactionsWorkspace({
     const formData = new FormData();
     formData.set("payload", JSON.stringify(payload));
     startTransition(async () => {
-      const result = await importTransactionsAction(undefined, formData);
-      if (result.ok) {
-        toast.success(result.message ?? "Imported");
-        setImportOpen(false);
-        setMatrix(null);
-        setMapping(null);
-        setPendingRows(null);
-        setPreviewSwapSides(false);
-        setSelected(new Set());
-      } else {
-        toast.error(result.error ?? "Import failed");
+      try {
+        const result = await importTransactionsAction(undefined, formData);
+        if (result?.ok) {
+          toast.success(result.message ?? "Imported");
+          setImportOpen(false);
+          setMatrix(null);
+          setMapping(null);
+          setPendingRows(null);
+          setPreviewSwapSides(false);
+          setSelected(new Set());
+        } else {
+          toast.error(result?.error ?? "Import failed");
+        }
+      } catch (err) {
+        console.error("[submitImport]", err);
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : "Import failed (server error). Try fewer rows or CSV/Excel.",
+        );
       }
     });
   }

@@ -900,172 +900,220 @@ export async function deleteTaxCodeAction(formData: FormData): Promise<void> {
   revalidatePath("/app/tax-codes");
 }
 
+function parseImportDate(raw: string): Date | null {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return null;
+  // Guard absurd OCR dates that Prisma/Postgres reject
+  const year = d.getUTCFullYear();
+  if (year < 1990 || year > 2100) return null;
+  return d;
+}
+
 export async function importTransactionsAction(
   _prev: ActionResult | undefined,
   formData: FormData,
 ): Promise<ActionResult> {
-  const { organization, activeBankId, role, session } = await requireOrgContext("BOOKKEEPER");
-  if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
+  try {
+    const { organization, activeBankId, role, session } = await requireOrgContext("BOOKKEEPER");
+    if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
 
-  const payloadRaw = String(formData.get("payload") ?? "");
-  if (!payloadRaw) return { ok: false, error: "No import payload." };
+    const payloadRaw = String(formData.get("payload") ?? "");
+    if (!payloadRaw) return { ok: false, error: "No import payload." };
 
-  let payload: {
-    rows: Array<{
-      date: string;
+    let payload: {
+      rows: Array<{
+        date: string;
+        description: string;
+        moneyIn: number;
+        moneyOut: number;
+        accountNumber?: string;
+        accountName?: string;
+        province?: string;
+        notes?: string;
+        externalTransactionId?: string;
+      }>;
+      applyRules: boolean;
+      replaceExisting?: boolean;
+      bankAccountId?: string;
+      newBankName?: string;
+      newBankType?: "BANK" | "CREDIT_CARD";
+    };
+
+    try {
+      payload = JSON.parse(payloadRaw);
+    } catch {
+      return { ok: false, error: "Invalid import payload." };
+    }
+
+    if (!payload.rows?.length) return { ok: false, error: "No rows to import." };
+
+    const { getOrganizationDefaultProvince } = await import("@/lib/org-meta");
+    const clientProvince = await getOrganizationDefaultProvince(organization.id);
+
+    const taxCodeRows = await prisma.taxCode.findMany({
+      where: { organizationId: organization.id },
+      select: { code: true, kind: true, province: true, rate: true },
+    });
+    const { resolveProvinceTaxCode } = await import("@/lib/province-tax-profile");
+    const defaultPstCode = resolveProvinceTaxCode(
+      clientProvince,
+      taxCodeRows.map((t) => ({
+        code: t.code,
+        kind: t.kind,
+        province: t.province,
+        rate: Number(t.rate),
+      })),
+    );
+
+    let bank =
+      payload.bankAccountId
+        ? await prisma.bankAccount.findFirst({
+            where: {
+              id: payload.bankAccountId,
+              organizationId: organization.id,
+              isArchived: false,
+            },
+          })
+        : null;
+
+    if (!bank && payload.newBankName?.trim()) {
+      bank = await prisma.bankAccount.create({
+        data: {
+          organizationId: organization.id,
+          name: payload.newBankName.trim(),
+          type: payload.newBankType === "CREDIT_CARD" ? "CREDIT_CARD" : "BANK",
+          currency: "CAD",
+        },
+      });
+    }
+
+    if (!bank && activeBankId) {
+      bank = await prisma.bankAccount.findFirst({
+        where: {
+          id: activeBankId,
+          organizationId: organization.id,
+          isArchived: false,
+        },
+      });
+    }
+
+    // Still no bank? Auto-create a working bank so imports never block on setup.
+    if (!bank) {
+      bank = await prisma.bankAccount.create({
+        data: {
+          organizationId: organization.id,
+          name: "Imported Statements",
+          type: "BANK",
+          currency: "CAD",
+          institutionName: "Manual import",
+        },
+      });
+    }
+
+    await prisma.userPreference.upsert({
+      where: { userId: session.user.id },
+      create: {
+        userId: session.user.id,
+        activeOrganizationId: organization.id,
+        activeBankAccountId: bank.id,
+      },
+      update: {
+        activeOrganizationId: organization.id,
+        activeBankAccountId: bank.id,
+      },
+    });
+
+    if (payload.replaceExisting) {
+      await prisma.transaction.deleteMany({
+        where: {
+          organizationId: organization.id,
+          bankAccountId: bank.id,
+        },
+      });
+    }
+
+    const externalIds = [
+      ...new Set(
+        payload.rows
+          .map((r) => String(r.externalTransactionId ?? "").trim())
+          .filter(Boolean),
+      ),
+    ];
+
+    const existingExternalIds = new Set(
+      externalIds.length
+        ? (
+            await prisma.transaction.findMany({
+              where: {
+                bankAccountId: bank.id,
+                externalTransactionId: { in: externalIds },
+              },
+              select: { externalTransactionId: true },
+            })
+          )
+            .map((t) => t.externalTransactionId)
+            .filter((id): id is string => Boolean(id))
+        : [],
+    );
+
+    const rules = payload.applyRules
+      ? await prisma.rule.findMany({
+          where: { organizationId: organization.id, active: true },
+          orderBy: [{ isBuiltIn: "asc" }, { createdAt: "asc" }],
+        })
+      : [];
+
+    const { findMatchingRule } = await import("@/lib/rules-engine");
+
+    const seenExternalInBatch = new Set<string>();
+    let invalidDates = 0;
+    let skippedDupes = 0;
+
+    const prepared: Array<{
+      organizationId: string;
+      bankAccountId: string;
+      date: Date;
       description: string;
       moneyIn: number;
       moneyOut: number;
-      accountNumber?: string;
-      accountName?: string;
-      province?: string;
-      notes?: string;
-      externalTransactionId?: string;
-    }>;
-    applyRules: boolean;
-    replaceExisting?: boolean;
-    bankAccountId?: string;
-    newBankName?: string;
-    newBankType?: "BANK" | "CREDIT_CARD";
-  };
+      accountNumber: string | null;
+      accountName: string | null;
+      province: string | null;
+      notes: string | null;
+      externalTransactionId: string | null;
+      taxCodes: string[];
+      provinceTaxCodes: string[];
+      taxMode: "INCLUSIVE" | "EXCLUSIVE" | "KEEP";
+    }> = [];
 
-  try {
-    payload = JSON.parse(payloadRaw);
-  } catch {
-    return { ok: false, error: "Invalid import payload." };
-  }
+    for (const row of payload.rows) {
+      const date = parseImportDate(row.date);
+      if (!date) {
+        invalidDates += 1;
+        continue;
+      }
 
-  if (!payload.rows?.length) return { ok: false, error: "No rows to import." };
+      const externalId = String(row.externalTransactionId ?? "").trim() || null;
+      if (externalId) {
+        if (existingExternalIds.has(externalId) || seenExternalInBatch.has(externalId)) {
+          skippedDupes += 1;
+          continue;
+        }
+        seenExternalInBatch.add(externalId);
+      }
 
-  const { getOrganizationDefaultProvince } = await import("@/lib/org-meta");
-  const clientProvince = await getOrganizationDefaultProvince(organization.id);
+      const moneyIn = Number(row.moneyIn) || 0;
+      const moneyOut = Number(row.moneyOut) || 0;
+      const description = String(row.description ?? "").trim() || "Imported transaction";
 
-  const taxCodeRows = await prisma.taxCode.findMany({
-    where: { organizationId: organization.id },
-    select: { code: true, kind: true, province: true, rate: true },
-  });
-  const { resolveProvinceTaxCode } = await import("@/lib/province-tax-profile");
-  const defaultPstCode = resolveProvinceTaxCode(
-    clientProvince,
-    taxCodeRows.map((t) => ({
-      code: t.code,
-      kind: t.kind,
-      province: t.province,
-      rate: Number(t.rate),
-    })),
-  );
-
-  let bank =
-    payload.bankAccountId
-      ? await prisma.bankAccount.findFirst({
-          where: {
-            id: payload.bankAccountId,
-            organizationId: organization.id,
-            isArchived: false,
-          },
-        })
-      : null;
-
-  if (!bank && payload.newBankName?.trim()) {
-    bank = await prisma.bankAccount.create({
-      data: {
-        organizationId: organization.id,
-        name: payload.newBankName.trim(),
-        type: payload.newBankType === "CREDIT_CARD" ? "CREDIT_CARD" : "BANK",
-        currency: "CAD",
-      },
-    });
-  }
-
-  if (!bank && activeBankId) {
-    bank = await prisma.bankAccount.findFirst({
-      where: {
-        id: activeBankId,
-        organizationId: organization.id,
-        isArchived: false,
-      },
-    });
-  }
-
-  // Still no bank? Auto-create a working bank so imports never block on setup.
-  if (!bank) {
-    bank = await prisma.bankAccount.create({
-      data: {
-        organizationId: organization.id,
-        name: "Imported Statements",
-        type: "BANK",
-        currency: "CAD",
-        institutionName: "Manual import",
-      },
-    });
-  }
-
-  await prisma.userPreference.upsert({
-    where: { userId: session.user.id },
-    create: {
-      userId: session.user.id,
-      activeOrganizationId: organization.id,
-      activeBankAccountId: bank.id,
-    },
-    update: {
-      activeOrganizationId: organization.id,
-      activeBankAccountId: bank.id,
-    },
-  });
-
-  if (payload.replaceExisting) {
-    await prisma.transaction.deleteMany({
-      where: {
-        organizationId: organization.id,
-        bankAccountId: bank.id,
-      },
-    });
-  }
-
-  const existingExternalIds = new Set(
-    (
-      await prisma.transaction.findMany({
-        where: {
-          bankAccountId: bank.id,
-          externalTransactionId: {
-            in: payload.rows
-              .map((r) => r.externalTransactionId)
-              .filter((id): id is string => Boolean(id)),
-          },
-        },
-        select: { externalTransactionId: true },
-      })
-    )
-      .map((t) => t.externalTransactionId)
-      .filter(Boolean),
-  );
-
-  const rowsToImport = payload.rows.filter(
-    (row) =>
-      !row.externalTransactionId || !existingExternalIds.has(row.externalTransactionId),
-  );
-
-  if (!rowsToImport.length) {
-    return { ok: false, error: "All rows already imported (duplicate FITIDs)." };
-  }
-
-  const rules = payload.applyRules
-    ? await prisma.rule.findMany({
-        where: { organizationId: organization.id, active: true },
-        orderBy: [{ isBuiltIn: "asc" }, { createdAt: "asc" }],
-      })
-    : [];
-
-  const { findMatchingRule } = await import("@/lib/rules-engine");
-
-  const created = await prisma.$transaction(
-    rowsToImport.map((row) => {
       const match =
         payload.applyRules && !row.accountName
           ? findMatchingRule(rules, {
-              description: row.description,
-              moneyIn: row.moneyIn,
-              moneyOut: row.moneyOut,
+              description,
+              moneyIn,
+              moneyOut,
               statementType: bank.type,
             })
           : null;
@@ -1076,51 +1124,91 @@ export async function importTransactionsAction(
         provinceTaxCodes = [defaultPstCode];
       }
 
-      return prisma.transaction.create({
-        data: {
-          organizationId: organization.id,
-          bankAccountId: bank.id,
-          date: new Date(row.date),
-          description: row.description,
-          moneyIn: row.moneyIn,
-          moneyOut: row.moneyOut,
-          accountNumber: row.accountNumber ?? match?.accountNumber ?? null,
-          accountName: row.accountName ?? match?.accountName ?? null,
-          province,
-          notes: row.notes ?? null,
-          externalTransactionId: row.externalTransactionId || null,
-          taxCodes: match?.taxCodes ?? [],
-          provinceTaxCodes,
-          taxMode: match?.taxMode ?? "INCLUSIVE",
-        },
+      prepared.push({
+        organizationId: organization.id,
+        bankAccountId: bank.id,
+        date,
+        description: description.slice(0, 2000),
+        moneyIn,
+        moneyOut,
+        accountNumber: (row.accountNumber ?? match?.accountNumber ?? null)?.slice(0, 40) ?? null,
+        accountName: (row.accountName ?? match?.accountName ?? null)?.slice(0, 160) ?? null,
+        province,
+        notes: row.notes ? String(row.notes).slice(0, 2000) : null,
+        externalTransactionId: externalId,
+        taxCodes: match?.taxCodes ?? [],
+        provinceTaxCodes,
+        taxMode: match?.taxMode ?? "INCLUSIVE",
       });
-    }),
-  );
+    }
 
-  const skipped = payload.rows.length - rowsToImport.length;
+    if (!prepared.length) {
+      if (invalidDates && !skippedDupes) {
+        return {
+          ok: false,
+          error: `No valid rows to import (${invalidDates} had invalid dates from OCR/AI).`,
+        };
+      }
+      return {
+        ok: false,
+        error: skippedDupes
+          ? "All rows already imported (duplicate FITIDs)."
+          : "No valid rows to import.",
+      };
+    }
 
-  await prisma.auditLog.create({
-    data: {
-      organizationId: organization.id,
-      actorId: session.user.id,
-      action: "transactions.imported",
-      entityType: "BankAccount",
-      entityId: bank.id,
-      metadata: {
-        count: created.length,
-        skipped,
-        applyRules: payload.applyRules,
-        bankName: bank.name,
+    // Chunked createMany — avoids interactive-transaction timeouts on large scanned PDFs.
+    const CHUNK = 75;
+    let createdCount = 0;
+    for (let i = 0; i < prepared.length; i += CHUNK) {
+      const chunk = prepared.slice(i, i + CHUNK);
+      const result = await prisma.transaction.createMany({
+        data: chunk,
+        skipDuplicates: true,
+      });
+      createdCount += result.count;
+    }
+
+    const skipped = payload.rows.length - createdCount;
+
+    await prisma.auditLog.create({
+      data: {
+        organizationId: organization.id,
+        actorId: session.user.id,
+        action: "transactions.imported",
+        entityType: "BankAccount",
+        entityId: bank.id,
+        metadata: {
+          count: createdCount,
+          skipped,
+          invalidDates,
+          skippedDupes,
+          applyRules: payload.applyRules,
+          bankName: bank.name,
+        },
       },
-    },
-  });
+    });
 
-  revalidatePath("/app");
-  return {
-    ok: true,
-    count: created.length,
-    message: `Imported ${created.length} into ${bank.name}${skipped ? ` (${skipped} duplicates skipped)` : ""}.`,
-  };
+    revalidatePath("/app");
+    const extras = [
+      skippedDupes ? `${skippedDupes} duplicates skipped` : null,
+      invalidDates ? `${invalidDates} invalid dates skipped` : null,
+    ].filter(Boolean);
+    return {
+      ok: true,
+      count: createdCount,
+      message: `Imported ${createdCount} into ${bank.name}${extras.length ? ` (${extras.join(", ")})` : ""}.`,
+    };
+  } catch (error) {
+    console.error("[importTransactionsAction]", error);
+    const message =
+      error instanceof Error ? error.message : "Import failed unexpectedly.";
+    // Never throw — production Server Actions turn throws into opaque 500 digests.
+    return {
+      ok: false,
+      error: message.slice(0, 300),
+    };
+  }
 }
 
 export async function applyRulesToTransactionsAction(): Promise<ActionResult> {

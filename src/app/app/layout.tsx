@@ -8,6 +8,9 @@ import type { OrgRole } from "@prisma/client";
 import { getMembershipContext, requireSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 
+/** Large scanned-PDF imports via Server Actions need headroom on Vercel. */
+export const maxDuration = 60;
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
   const globalRole = ((session.user as { globalRole?: string }).globalRole ??
