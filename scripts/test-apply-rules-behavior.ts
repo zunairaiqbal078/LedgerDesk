@@ -67,13 +67,19 @@ async function main() {
     where: { organizationId: org.id, name: { startsWith: MARKER } },
   });
 
-  const created = [];
+  type CreatedTx = {
+    id: string;
+    description: string;
+    accountName: string | null;
+  };
+  const created: CreatedTx[] = [];
+  let firstStarbucksSeen = false;
   for (const row of mapped.rows) {
     const isStarbucks = /starbucks/i.test(row.description);
-    const preCategorized =
-      isStarbucks && created.filter((c) => /starbucks/i.test(c.description)).length === 0;
     // First Starbucks → WRONG category (should be overridden)
     // Second Starbucks → blank (should get rule)
+    const preCategorized = isStarbucks && !firstStarbucksSeen;
+    if (isStarbucks) firstStarbucksSeen = true;
     const tx = await prisma.transaction.create({
       data: {
         organizationId: org.id,
@@ -88,7 +94,11 @@ async function main() {
         notes: "rules behavior test",
       },
     });
-    created.push(tx);
+    created.push({
+      id: tx.id,
+      description: tx.description,
+      accountName: tx.accountName,
+    });
   }
 
   const rule = await prisma.rule.create({
