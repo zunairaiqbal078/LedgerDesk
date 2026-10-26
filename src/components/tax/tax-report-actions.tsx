@@ -4,12 +4,10 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   downloadGstPeriodPdf,
-  downloadGstYearPdf,
   downloadPstPeriodPdf,
-  downloadPstYearPdf,
-  type PeriodCardTotals,
   type TaxPdfLine,
 } from "@/lib/tax-report-pdf";
+import { downloadTaxRangeCsv, downloadTaxRangeExcel } from "@/lib/tax-range-export";
 
 type GstTotals = {
   taxableSales: number;
@@ -33,22 +31,27 @@ export function GstReportActions({
   periodLabel,
   start,
   end,
-  yearLabel,
   totals,
   lines,
-  yearPeriods,
 }: {
   clientName: string;
   frequencyLabel: string;
   periodLabel: string;
   start: string;
   end: string;
-  yearLabel: string;
+  yearLabel?: string;
   totals: GstTotals;
   lines: TaxPdfLine[];
-  yearPeriods: PeriodCardTotals[];
+  yearPeriods?: unknown;
 }) {
   const router = useRouter();
+  const exportTotals = {
+    taxableSales: totals.taxableSales,
+    nonTaxableSales: totals.nonTaxableSales,
+    collected: totals.gstCollected,
+    paidOrItc: totals.itcPaid,
+    payable: totals.gstPayable,
+  };
 
   return (
     <div className="toolbar-left flex flex-wrap gap-2">
@@ -67,6 +70,48 @@ export function GstReportActions({
         className="btn-converter btn-light"
         onClick={() => {
           try {
+            downloadTaxRangeCsv({
+              kind: "gst",
+              clientName,
+              start,
+              end,
+              totals: exportTotals,
+              lines,
+            });
+            toast.success("CSV downloaded");
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "CSV failed");
+          }
+        }}
+      >
+        Download CSV
+      </button>
+      <button
+        type="button"
+        className="btn-converter btn-light"
+        onClick={async () => {
+          try {
+            await downloadTaxRangeExcel({
+              kind: "gst",
+              clientName,
+              start,
+              end,
+              totals: exportTotals,
+              lines,
+            });
+            toast.success("Excel downloaded");
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Excel failed");
+          }
+        }}
+      >
+        Download Excel
+      </button>
+      <button
+        type="button"
+        className="btn-converter btn-light"
+        onClick={() => {
+          try {
             downloadGstPeriodPdf({
               clientName,
               frequencyLabel,
@@ -76,32 +121,13 @@ export function GstReportActions({
               totals,
               lines,
             });
-            toast.success("Period PDF downloaded");
+            toast.success("PDF downloaded");
           } catch (e) {
             toast.error(e instanceof Error ? e.message : "PDF failed");
           }
         }}
       >
-        Download Period PDF
-      </button>
-      <button
-        type="button"
-        className="btn-converter btn-light"
-        onClick={() => {
-          try {
-            downloadGstYearPdf({
-              clientName,
-              frequencyLabel,
-              yearLabel,
-              periods: yearPeriods,
-            });
-            toast.success("GST-year PDF downloaded");
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : "PDF failed");
-          }
-        }}
-      >
-        Download GST-Year PDF
+        Download PDF
       </button>
     </div>
   );
@@ -113,22 +139,27 @@ export function PstReportActions({
   periodLabel,
   start,
   end,
-  yearLabel,
   totals,
   lines,
-  yearPeriods,
 }: {
   clientName: string;
   frequencyLabel: string;
   periodLabel: string;
   start: string;
   end: string;
-  yearLabel: string;
+  yearLabel?: string;
   totals: PstTotals;
   lines: TaxPdfLine[];
-  yearPeriods: PeriodCardTotals[];
+  yearPeriods?: unknown;
 }) {
   const router = useRouter();
+  const exportTotals = {
+    taxableSales: totals.taxableSales,
+    nonTaxableSales: totals.nonTaxableSales,
+    collected: totals.pstCollected,
+    paidOrItc: totals.pstPaid,
+    payable: totals.pstPayable,
+  };
 
   return (
     <div className="toolbar-left flex flex-wrap gap-2">
@@ -147,6 +178,48 @@ export function PstReportActions({
         className="btn-converter btn-light"
         onClick={() => {
           try {
+            downloadTaxRangeCsv({
+              kind: "pst",
+              clientName,
+              start,
+              end,
+              totals: exportTotals,
+              lines,
+            });
+            toast.success("CSV downloaded");
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "CSV failed");
+          }
+        }}
+      >
+        Download CSV
+      </button>
+      <button
+        type="button"
+        className="btn-converter btn-light"
+        onClick={async () => {
+          try {
+            await downloadTaxRangeExcel({
+              kind: "pst",
+              clientName,
+              start,
+              end,
+              totals: exportTotals,
+              lines,
+            });
+            toast.success("Excel downloaded");
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Excel failed");
+          }
+        }}
+      >
+        Download Excel
+      </button>
+      <button
+        type="button"
+        className="btn-converter btn-light"
+        onClick={() => {
+          try {
             downloadPstPeriodPdf({
               clientName,
               frequencyLabel,
@@ -156,32 +229,13 @@ export function PstReportActions({
               totals,
               lines,
             });
-            toast.success("Period PDF downloaded");
+            toast.success("PDF downloaded");
           } catch (e) {
             toast.error(e instanceof Error ? e.message : "PDF failed");
           }
         }}
       >
-        Download Period PDF
-      </button>
-      <button
-        type="button"
-        className="btn-converter btn-light"
-        onClick={() => {
-          try {
-            downloadPstYearPdf({
-              clientName,
-              frequencyLabel,
-              yearLabel,
-              periods: yearPeriods,
-            });
-            toast.success("Fiscal-year PDF downloaded");
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : "PDF failed");
-          }
-        }}
-      >
-        Download Fiscal-Year PDF
+        Download PDF
       </button>
     </div>
   );

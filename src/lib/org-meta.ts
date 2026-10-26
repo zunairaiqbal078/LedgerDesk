@@ -25,7 +25,8 @@ export async function getOrganizationDefaultProvince(
   const rows = await prisma.$queryRaw<Array<{ defaultProvince: string | null }>>(Prisma.sql`
     SELECT "defaultProvince" FROM "Organization" WHERE id = ${organizationId} LIMIT 1
   `);
-  return rows[0]?.defaultProvince ?? null;
+  const value = rows[0]?.defaultProvince?.trim() || null;
+  return value;
 }
 
 export async function getOrganizationStarterChartVisible(

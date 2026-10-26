@@ -403,10 +403,11 @@ const MONTH_SHORT = [
 
 /** Compact card title like HTML (Q1 / Mar / Year). */
 export function compactPeriodTitle(
-  frequency: "MONTHLY" | "QUARTERLY" | "YEARLY",
+  frequency: "MONTHLY" | "QUARTERLY" | "YEARLY" | "CUSTOM",
   period: { key: string; label: string; start: Date },
   kind: "gst" | "pst" = "gst",
 ) {
+  if (frequency === "CUSTOM") return "Custom";
   if (frequency === "YEARLY") {
     return kind === "pst" ? "Fiscal Year" : "GST Year";
   }

@@ -30,6 +30,21 @@ type TxRow = {
   bankType?: "BANK" | "CREDIT_CARD";
 };
 
+type PersistOverrides = {
+  bankAccountId?: string;
+  date?: string;
+  description?: string;
+  moneyIn?: string;
+  moneyOut?: string;
+  accountNumber?: string;
+  accountName?: string;
+  province?: string;
+  taxCodes?: string[];
+  provinceTaxCodes?: string[];
+  taxMode?: "INCLUSIVE" | "EXCLUSIVE";
+  notes?: string;
+};
+
 function EditableTransactionRowInner({
   tx,
   rowIndex,
@@ -37,10 +52,8 @@ function EditableTransactionRowInner({
   selected,
   onToggle,
   onPatched,
-  onDirtyChange,
-  registerRowSaver,
-  unregisterRowSaver,
-  onOpenTaxPicker,
+  onOpenGstTaxPicker,
+  onOpenPstTaxPicker,
   onCopyRow,
   onDeleteRow,
   accounts,
@@ -54,10 +67,8 @@ function EditableTransactionRowInner({
   selected: boolean;
   onToggle: () => void;
   onPatched?: (patch: TransactionRowPatch) => void;
-  onDirtyChange?: (id: string, dirty: boolean) => void;
-  registerRowSaver?: (id: string, saver: () => Promise<boolean>) => void;
-  unregisterRowSaver?: (id: string) => void;
-  onOpenTaxPicker?: () => void;
+  onOpenGstTaxPicker?: () => void;
+  onOpenPstTaxPicker?: () => void;
   onCopyRow?: () => void;
   onDeleteRow?: () => void;
   accounts: Array<{ number: string; name: string }>;
@@ -80,6 +91,7 @@ function EditableTransactionRowInner({
   const [localProvinceTaxCodes, setLocalProvinceTaxCodes] = useState(tx.provinceTaxCodes);
   const [taxMode, setTaxMode] = useState(tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE");
   const [notes, setNotes] = useState(tx.notes ?? "");
+  const savingRef = useRef(false);
 
   useEffect(() => {
     setStatementType(tx.bankType === "CREDIT_CARD" ? "Credit Card" : "Bank");
@@ -91,11 +103,35 @@ function EditableTransactionRowInner({
     setAccountNumber(tx.accountNumber ?? "");
     setAccountName(tx.accountName ?? "");
     setProvince(tx.province ?? "");
-    setLocalTaxCodes(tx.taxCodes);
-    setLocalProvinceTaxCodes(tx.provinceTaxCodes);
     setTaxMode(tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE");
     setNotes(tx.notes ?? "");
-  }, [tx]);
+  }, [
+    tx.id,
+    tx.bankType,
+    tx.bankAccountId,
+    tx.date,
+    tx.description,
+    tx.moneyIn,
+    tx.moneyOut,
+    tx.accountNumber,
+    tx.accountName,
+    tx.province,
+    tx.taxMode,
+    tx.notes,
+  ]);
+
+  const taxCodesKey = tx.taxCodes.join("|");
+  const provinceTaxCodesKey = tx.provinceTaxCodes.join("|");
+
+  useEffect(() => {
+    setLocalTaxCodes(tx.taxCodes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync when codes change
+  }, [tx.id, taxCodesKey]);
+
+  useEffect(() => {
+    setLocalProvinceTaxCodes(tx.provinceTaxCodes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync when codes change
+  }, [tx.id, provinceTaxCodesKey]);
 
   const postingBanks = useMemo(
     () =>
@@ -120,115 +156,114 @@ function EditableTransactionRowInner({
     [moneyIn, moneyOut, localTaxCodes, localProvinceTaxCodes, taxMode, taxCatalog],
   );
 
-  const taxLabel =
-    [...localTaxCodes, ...localProvinceTaxCodes].filter(Boolean).join(" + ") || "Select tax";
+  const gstLabel = localTaxCodes.filter(Boolean).join(" + ") || "Select Sales Tax Code";
+  const pstLabel = localProvinceTaxCodes.filter(Boolean).join(" + ") || "Select PST Code";
 
-  const isDirty = useMemo(() => {
-    const stmtDirty =
-      (statementType === "Credit Card" ? "CREDIT_CARD" : "BANK") !==
-      (tx.bankType === "CREDIT_CARD" ? "CREDIT_CARD" : "BANK");
-    return (
-      stmtDirty ||
-      bankAccountId !== tx.bankAccountId ||
-      date !== tx.date ||
-      description !== tx.description ||
-      (Number(moneyIn) || 0) !== tx.moneyIn ||
-      (Number(moneyOut) || 0) !== tx.moneyOut ||
-      (accountNumber || "") !== (tx.accountNumber ?? "") ||
-      (accountName || "") !== (tx.accountName ?? "") ||
-      (province || "") !== (tx.province ?? "") ||
-      taxMode !== (tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE") ||
-      (notes || "") !== (tx.notes ?? "") ||
-      localTaxCodes.join("|") !== tx.taxCodes.join("|") ||
-      localProvinceTaxCodes.join("|") !== tx.provinceTaxCodes.join("|")
-    );
-  }, [
-    statementType,
-    bankAccountId,
-    date,
-    description,
-    moneyIn,
-    moneyOut,
-    accountNumber,
-    accountName,
-    province,
-    taxMode,
-    notes,
-    localTaxCodes,
-    localProvinceTaxCodes,
-    tx,
-  ]);
+  const persist = useCallback(
+    async (overrides: PersistOverrides = {}) => {
+      if (!canEdit || savingRef.current) return;
+      const nextBank = overrides.bankAccountId ?? bankAccountId;
+      const nextDate = overrides.date ?? date;
+      const nextDesc = overrides.description ?? description;
+      const nextIn = overrides.moneyIn ?? moneyIn;
+      const nextOut = overrides.moneyOut ?? moneyOut;
+      const nextAcctNum = overrides.accountNumber ?? accountNumber;
+      const nextAcctName = overrides.accountName ?? accountName;
+      const nextProvince = overrides.province ?? province;
+      const nextSales = overrides.taxCodes ?? localTaxCodes;
+      const nextPst = overrides.provinceTaxCodes ?? localProvinceTaxCodes;
+      const nextMode = overrides.taxMode ?? taxMode;
+      const nextNotes = overrides.notes ?? notes;
 
-  useEffect(() => {
-    onDirtyChange?.(tx.id, isDirty);
-  }, [tx.id, isDirty, onDirtyChange]);
+      const unchanged =
+        nextBank === tx.bankAccountId &&
+        nextDate === tx.date &&
+        nextDesc === tx.description &&
+        (Number(nextIn) || 0) === tx.moneyIn &&
+        (Number(nextOut) || 0) === tx.moneyOut &&
+        (nextAcctNum || "") === (tx.accountNumber ?? "") &&
+        (nextAcctName || "") === (tx.accountName ?? "") &&
+        (nextProvince || "") === (tx.province ?? "") &&
+        nextMode === (tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE") &&
+        (nextNotes || "") === (tx.notes ?? "") &&
+        nextSales.join("|") === tx.taxCodes.join("|") &&
+        nextPst.join("|") === tx.provinceTaxCodes.join("|");
+      if (unchanged) return;
 
-  const buildFormData = useCallback(() => {
-    const formData = new FormData();
-    formData.set("inline", "true");
-    formData.set("id", tx.id);
-    formData.set("date", date);
-    formData.set("description", description);
-    formData.set("moneyIn", moneyIn || "0");
-    formData.set("moneyOut", moneyOut || "0");
-    formData.set("accountNumber", accountNumber);
-    formData.set(
-      "account",
-      accountName ? `${accountNumber}||${accountName}` : accountNumber ? `${accountNumber}||` : "",
-    );
-    formData.set("province", province);
-    formData.set("taxCodes", localTaxCodes.join(","));
-    formData.set("provinceTaxCodes", localProvinceTaxCodes.join(","));
-    formData.set("taxMode", taxMode);
-    formData.set("notes", notes);
-    formData.set("bankAccountId", bankAccountId);
-    return formData;
-  }, [
-    tx.id,
-    date,
-    description,
-    moneyIn,
-    moneyOut,
-    accountNumber,
-    accountName,
-    province,
-    localTaxCodes,
-    localProvinceTaxCodes,
-    taxMode,
-    notes,
-    bankAccountId,
-  ]);
-
-  const saveNow = useCallback(async (): Promise<boolean> => {
-    if (!canEdit) return false;
-    const formData = buildFormData();
-    const result = await updateTransactionCategoryAction(undefined, formData);
-    if (result.ok && result.patch) {
-      onPatched?.(result.patch);
-      return true;
-    }
-    toast.error(result.error ?? "Save failed");
-    return false;
-  }, [canEdit, buildFormData, onPatched]);
-
-  const saveRef = useRef(saveNow);
-  saveRef.current = saveNow;
-
-  useEffect(() => {
-    if (!registerRowSaver) return;
-    registerRowSaver(tx.id, () => saveRef.current());
-    return () => unregisterRowSaver?.(tx.id);
-  }, [tx.id, registerRowSaver, unregisterRowSaver]);
+      savingRef.current = true;
+      const formData = new FormData();
+      formData.set("inline", "true");
+      formData.set("id", tx.id);
+      formData.set("date", nextDate);
+      formData.set("description", nextDesc);
+      formData.set("moneyIn", nextIn || "0");
+      formData.set("moneyOut", nextOut || "0");
+      formData.set("accountNumber", nextAcctNum);
+      formData.set(
+        "account",
+        nextAcctName
+          ? `${nextAcctNum}||${nextAcctName}`
+          : nextAcctNum
+            ? `${nextAcctNum}||`
+            : "",
+      );
+      formData.set("province", nextProvince);
+      formData.set("taxCodes", nextSales.join(","));
+      formData.set("provinceTaxCodes", nextPst.join(","));
+      formData.set("taxMode", nextMode);
+      formData.set("notes", nextNotes);
+      formData.set("bankAccountId", nextBank);
+      try {
+        const result = await updateTransactionCategoryAction(undefined, formData);
+        if (result.ok && result.patch) {
+          onPatched?.(result.patch);
+        } else {
+          toast.error(result.error ?? "Save failed");
+        }
+      } finally {
+        savingRef.current = false;
+      }
+    },
+    [
+      canEdit,
+      bankAccountId,
+      date,
+      description,
+      moneyIn,
+      moneyOut,
+      accountNumber,
+      accountName,
+      province,
+      localTaxCodes,
+      localProvinceTaxCodes,
+      taxMode,
+      notes,
+      tx,
+      onPatched,
+    ],
+  );
 
   function onProvinceChange(code: string) {
-    const p = normalizeProvince(code);
+    const raw = code.trim();
+    if (!raw) {
+      setProvince("");
+      setLocalProvinceTaxCodes([]);
+      void persist({ province: "", provinceTaxCodes: [] });
+      return;
+    }
+    const p = normalizeProvince(raw);
     setProvince(p);
     const linked = provinceTaxByProvince.get(p);
-    if (linked) setLocalProvinceTaxCodes([linked]);
+    if (linked) {
+      setLocalProvinceTaxCodes([linked]);
+      void persist({ province: p, provinceTaxCodes: [linked] });
+    } else {
+      void persist({ province: p });
+    }
   }
 
   return (
-    <tr className={isDirty ? "tx-row-dirty" : undefined}>
+    <tr>
       {canEdit ? (
         <td className="col-check">
           <input
@@ -250,7 +285,10 @@ function EditableTransactionRowInner({
               const next = banks.find((b) =>
                 v === "Credit Card" ? b.type === "CREDIT_CARD" : b.type === "BANK",
               );
-              if (next) setBankAccountId(next.id);
+              if (next) {
+                setBankAccountId(next.id);
+                void persist({ bankAccountId: next.id });
+              }
             }}
           >
             <option value="Bank">Bank</option>
@@ -264,7 +302,14 @@ function EditableTransactionRowInner({
       </td>
       <td className="posting-acct col-posting">
         {canEdit ? (
-          <select value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)}>
+          <select
+            value={bankAccountId}
+            onChange={(e) => {
+              const v = e.target.value;
+              setBankAccountId(v);
+              void persist({ bankAccountId: v });
+            }}
+          >
             {postingBanks.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
@@ -277,14 +322,24 @@ function EditableTransactionRowInner({
       </td>
       <td className="date col-date">
         {canEdit ? (
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            onBlur={() => void persist()}
+          />
         ) : (
           date
         )}
       </td>
       <td className="desc col-desc">
         {canEdit ? (
-          <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onBlur={() => void persist()}
+          />
         ) : (
           description
         )}
@@ -297,8 +352,13 @@ function EditableTransactionRowInner({
             min="0"
             value={moneyIn}
             onChange={(e) => setMoneyIn(e.target.value)}
+            onBlur={() => void persist()}
           />
-        ) : moneyIn ? `$${Number(moneyIn).toFixed(2)}` : ""}
+        ) : moneyIn ? (
+          `$${Number(moneyIn).toFixed(2)}`
+        ) : (
+          ""
+        )}
       </td>
       <td className="num money-out col-money">
         {canEdit ? (
@@ -308,8 +368,13 @@ function EditableTransactionRowInner({
             min="0"
             value={moneyOut}
             onChange={(e) => setMoneyOut(e.target.value)}
+            onBlur={() => void persist()}
           />
-        ) : moneyOut ? `$${Number(moneyOut).toFixed(2)}` : ""}
+        ) : moneyOut ? (
+          `$${Number(moneyOut).toFixed(2)}`
+        ) : (
+          ""
+        )}
       </td>
       <td className="acctnum col-acctnum">
         {canEdit ? (
@@ -318,8 +383,11 @@ function EditableTransactionRowInner({
             onChange={(e) => {
               const num = e.target.value;
               const ac = accounts.find((a) => a.number === num);
+              const name = ac?.name ?? "";
               setAccountNumber(num);
               if (ac) setAccountName(ac.name);
+              else if (!num) setAccountName("");
+              void persist({ accountNumber: num, accountName: ac ? name : num ? accountName : "" });
             }}
           >
             <option value="">—</option>
@@ -340,8 +408,14 @@ function EditableTransactionRowInner({
             onChange={(e) => {
               const name = e.target.value;
               const ac = accounts.find((a) => a.name === name);
+              const num = ac?.number ?? "";
               setAccountName(name);
               if (ac) setAccountNumber(ac.number);
+              else if (!name) setAccountNumber("");
+              void persist({
+                accountName: name,
+                accountNumber: ac ? num : name ? accountNumber : "",
+              });
             }}
           >
             <option value="">—</option>
@@ -358,7 +432,7 @@ function EditableTransactionRowInner({
       <td className="col-province">
         {canEdit ? (
           <select value={province} onChange={(e) => onProvinceChange(e.target.value)}>
-            <option value="">—</option>
+            <option value="">None</option>
             {CANADIAN_PROVINCES.map(([code, name]) => (
               <option key={code} value={code}>
                 {code} — {name}
@@ -366,25 +440,50 @@ function EditableTransactionRowInner({
             ))}
           </select>
         ) : (
-          province || "—"
+          province || "None"
         )}
       </td>
-      <td className="taxcell">
+      <td className="taxcell col-tax">
         {canEdit ? (
-          <button type="button" className="taxbtn" title={taxLabel} onClick={onOpenTaxPicker}>
-            {taxLabel}
+          <button
+            type="button"
+            className="taxbtn"
+            title={gstLabel}
+            onClick={onOpenGstTaxPicker}
+          >
+            {gstLabel}
           </button>
-        ) : taxLabel === "Select tax" ? (
+        ) : gstLabel === "Select Sales Tax Code" ? (
           "—"
         ) : (
-          taxLabel
+          gstLabel
+        )}
+      </td>
+      <td className="taxcell col-tax">
+        {canEdit ? (
+          <button
+            type="button"
+            className="taxbtn"
+            title={pstLabel}
+            onClick={onOpenPstTaxPicker}
+          >
+            {pstLabel}
+          </button>
+        ) : pstLabel === "Select PST Code" ? (
+          "—"
+        ) : (
+          pstLabel
         )}
       </td>
       <td className="taxmode col-taxmode">
         {canEdit ? (
           <select
             value={taxMode}
-            onChange={(e) => setTaxMode(e.target.value as "INCLUSIVE" | "EXCLUSIVE")}
+            onChange={(e) => {
+              const v = e.target.value as "INCLUSIVE" | "EXCLUSIVE";
+              setTaxMode(v);
+              void persist({ taxMode: v });
+            }}
           >
             <option value="INCLUSIVE">Inclusive</option>
             <option value="EXCLUSIVE">Exclusive</option>
@@ -403,7 +502,12 @@ function EditableTransactionRowInner({
       </td>
       <td>
         {canEdit ? (
-          <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onBlur={() => void persist()}
+          />
         ) : (
           notes
         )}

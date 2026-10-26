@@ -107,7 +107,7 @@ async function ensureSoloCompany(input: {
       slug: await uniqueSlug(input.name),
       kind: "CLIENT",
       firmOrganizationId: null,
-      defaultProvince: input.province ?? "AB",
+      defaultProvince: input.province ?? null,
       members: {
         create: { userId: input.ownerId, role: "OWNER" },
       },

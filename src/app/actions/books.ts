@@ -1108,19 +1108,22 @@ export async function importTransactionsAction(
       const moneyOut = Number(row.moneyOut) || 0;
       const description = String(row.description ?? "").trim() || "Imported transaction";
 
-      const match =
-        payload.applyRules && !row.accountName
-          ? findMatchingRule(rules, {
-              description,
-              moneyIn,
-              moneyOut,
-              statementType: bank.type,
-            })
-          : null;
+      // When applyRules is on, matching rules override any CSV/OCR category.
+      const match = payload.applyRules
+        ? findMatchingRule(rules, {
+            description,
+            moneyIn,
+            moneyOut,
+            statementType: bank.type,
+          })
+        : null;
 
-      const province = row.province ?? clientProvince ?? null;
+      // Only inherit client province when the org actually has one set.
+      // No client province → leave transaction province blank (None).
+      const rowProvince = String(row.province ?? "").trim().toUpperCase() || null;
+      const province = rowProvince || clientProvince || null;
       let provinceTaxCodes = match?.provinceTaxCodes ?? [];
-      if (!provinceTaxCodes.length && defaultPstCode) {
+      if (!provinceTaxCodes.length && province && defaultPstCode) {
         provinceTaxCodes = [defaultPstCode];
       }
 
@@ -1131,8 +1134,8 @@ export async function importTransactionsAction(
         description: description.slice(0, 2000),
         moneyIn,
         moneyOut,
-        accountNumber: (row.accountNumber ?? match?.accountNumber ?? null)?.slice(0, 40) ?? null,
-        accountName: (row.accountName ?? match?.accountName ?? null)?.slice(0, 160) ?? null,
+        accountNumber: (match?.accountNumber ?? row.accountNumber ?? null)?.slice(0, 40) ?? null,
+        accountName: (match?.accountName ?? row.accountName ?? null)?.slice(0, 160) ?? null,
         province,
         notes: row.notes ? String(row.notes).slice(0, 2000) : null,
         externalTransactionId: externalId,
@@ -1227,17 +1230,18 @@ export async function applyRulesToTransactionsAction(): Promise<ActionResult> {
       where: { organizationId: organization.id, active: true },
       orderBy: [{ isBuiltIn: "asc" }, { createdAt: "asc" }],
     }),
+    // Include already-categorized rows — matching rules override existing Account/Category.
     prisma.transaction.findMany({
       where: {
         organizationId: organization.id,
         ...(activeBankId ? { bankAccountId: activeBankId } : {}),
-        OR: [{ accountName: null }, { accountName: "" }],
       },
     }),
   ]);
 
   const { findMatchingRule } = await import("@/lib/rules-engine");
   let updated = 0;
+  let overridden = 0;
   for (const tx of transactions) {
     const statementType = bankTypeById.get(tx.bankAccountId) ?? "BANK";
     const match = findMatchingRule(rules, {
@@ -1247,6 +1251,12 @@ export async function applyRulesToTransactionsAction(): Promise<ActionResult> {
       statementType,
     });
     if (!match) continue;
+
+    const hadCategory = Boolean(tx.accountName?.trim());
+    const categoryChanged =
+      hadCategory &&
+      (tx.accountName !== match.accountName || tx.accountNumber !== match.accountNumber);
+
     await prisma.transaction.update({
       where: { id: tx.id },
       data: {
@@ -1258,10 +1268,16 @@ export async function applyRulesToTransactionsAction(): Promise<ActionResult> {
       },
     });
     updated += 1;
+    if (categoryChanged) overridden += 1;
   }
 
   revalidatePath("/app");
-  return { ok: true, count: updated, message: `Applied rules to ${updated} transactions.` };
+  const overrideNote = overridden ? ` (${overridden} overridden)` : "";
+  return {
+    ok: true,
+    count: updated,
+    message: `Applied rules to ${updated} transactions${overrideNote}.`,
+  };
 }
 
 export async function bulkCategorizeAction(
@@ -1291,9 +1307,18 @@ export async function bulkCategorizeAction(
   const applyAccount = formData.get("applyAccount") === "true";
   const applyProvince = formData.get("applyProvince") === "true";
   const applyTax = formData.get("applyTax") === "true";
+  const applySalesTax = formData.get("applySalesTax") === "true" || applyTax;
+  const applyPstTax = formData.get("applyPstTax") === "true" || applyTax;
   const applyTaxMode = formData.get("applyTaxMode") === "true";
 
-  if (!applyPosting && !applyAccount && !applyProvince && !applyTax && !applyTaxMode) {
+  if (
+    !applyPosting &&
+    !applyAccount &&
+    !applyProvince &&
+    !applySalesTax &&
+    !applyPstTax &&
+    !applyTaxMode
+  ) {
     return { ok: false, error: "Choose at least one field to bulk edit." };
   }
 
@@ -1326,7 +1351,7 @@ export async function bulkCategorizeAction(
   if (applyProvince) {
     const province = String(formData.get("province") ?? "").trim().toUpperCase() || null;
     data.province = province;
-    if (province) {
+    if (province && !applyPstTax) {
       const pst = await prisma.taxCode.findFirst({
         where: {
           organizationId: organization.id,
@@ -1338,11 +1363,18 @@ export async function bulkCategorizeAction(
     }
   }
 
-  if (applyTax) {
-    const taxCodes = parseTaxCodes(String(formData.get("taxCodes") ?? ""));
-    const provinceTaxCodes = parseTaxCodes(String(formData.get("provinceTaxCodes") ?? ""));
-    if (taxCodes.length) data.taxCodes = taxCodes;
-    if (provinceTaxCodes.length) data.provinceTaxCodes = provinceTaxCodes;
+  const orgTaxCatalog = await prisma.taxCode.findMany({
+    where: { organizationId: organization.id },
+    select: { code: true, kind: true },
+  });
+  const { normalizeTaxCodeAssignment } = await import("@/lib/tax-reports");
+
+  if (applySalesTax || applyPstTax) {
+    const rawSales = parseTaxCodes(String(formData.get("taxCodes") ?? ""));
+    const rawPst = parseTaxCodes(String(formData.get("provinceTaxCodes") ?? ""));
+    const normalized = normalizeTaxCodeAssignment(rawSales, rawPst, orgTaxCatalog);
+    if (applySalesTax) data.taxCodes = normalized.taxCodes;
+    if (applyPstTax) data.provinceTaxCodes = normalized.provinceTaxCodes;
   }
 
   if (applyTaxMode) {
@@ -1499,6 +1531,17 @@ export async function updateTransactionAction(formData: FormData): Promise<Actio
   });
   if (!existing) return { ok: false, error: "Transaction not found." };
 
+  const catalog = await prisma.taxCode.findMany({
+    where: { organizationId: organization.id },
+    select: { code: true, kind: true },
+  });
+  const { normalizeTaxCodeAssignment } = await import("@/lib/tax-reports");
+  const normalizedTaxes = normalizeTaxCodeAssignment(
+    parseTaxCodes(String(formData.get("taxCodes") ?? "")),
+    parseTaxCodes(String(formData.get("provinceTaxCodes") ?? "")),
+    catalog,
+  );
+
   await prisma.transaction.update({
     where: { id },
     data: {
@@ -1507,8 +1550,8 @@ export async function updateTransactionAction(formData: FormData): Promise<Actio
       accountName: String(formData.get("accountName") ?? "") || null,
       province: String(formData.get("province") ?? "") || null,
       notes: String(formData.get("notes") ?? "") || null,
-      taxCodes: parseTaxCodes(String(formData.get("taxCodes") ?? "")),
-      provinceTaxCodes: parseTaxCodes(String(formData.get("provinceTaxCodes") ?? "")),
+      taxCodes: normalizedTaxes.taxCodes,
+      provinceTaxCodes: normalizedTaxes.provinceTaxCodes,
       taxMode:
         String(formData.get("taxMode") ?? existing.taxMode) === "EXCLUSIVE"
           ? "EXCLUSIVE"

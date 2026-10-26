@@ -555,6 +555,17 @@ export async function updateTransactionCategoryAction(
     if (account?.defaultPstCode) finalProvinceTax = [account.defaultPstCode];
   }
 
+  const catalog = await prisma.taxCode.findMany({
+    where: { organizationId: organization.id },
+    select: { code: true, kind: true },
+  });
+  const { normalizeTaxCodeAssignment } = await import("@/lib/tax-reports");
+  const normalizedTaxes = normalizeTaxCodeAssignment(
+    finalSalesTax,
+    finalProvinceTax,
+    catalog,
+  );
+
   const data: {
     description: string;
     accountNumber: string | null;
@@ -572,8 +583,8 @@ export async function updateTransactionCategoryAction(
     description,
     accountNumber: accountNumber || null,
     accountName,
-    taxCodes: finalSalesTax,
-    provinceTaxCodes: finalProvinceTax,
+    taxCodes: normalizedTaxes.taxCodes,
+    provinceTaxCodes: normalizedTaxes.provinceTaxCodes,
     taxMode: taxMode as "INCLUSIVE" | "EXCLUSIVE",
     province,
     notes,

@@ -404,7 +404,7 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
-  min-width: 1900px;
+  min-width: 2050px;
   font-size: 14px;
 }
 
@@ -1208,6 +1208,46 @@
   border-spacing: 0;
   min-width: 1180px;
   font-size: 13.5px;
+}
+
+.converter-app .ge-table .col-check,
+.converter-app .recon-table .col-check {
+  width: 42px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.converter-app .ge-table .col-check input,
+.converter-app .recon-table .col-check input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.converter-app .recon-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.converter-app .recon-table th {
+  background: #edf4f8;
+  color: #29485d;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.converter-app .recon-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf1f4;
+  vertical-align: middle;
 }
 
 .converter-app .ge-table th {

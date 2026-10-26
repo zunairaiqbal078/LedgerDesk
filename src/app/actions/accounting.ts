@@ -523,6 +523,7 @@ export async function deleteGeneralEntryAction(formData: FormData): Promise<void
     where: { id, organizationId: organization.id },
   });
   revalidatePath("/app/general-entries");
+  revalidatePath("/app");
 }
 
 export async function bulkDeleteGeneralEntriesAction(
@@ -540,6 +541,7 @@ export async function bulkDeleteGeneralEntriesAction(
     where: { id: { in: ids }, organizationId: organization.id },
   });
   revalidatePath("/app/general-entries");
+  revalidatePath("/app");
   return { ok: true, count: result.count, message: `Deleted ${result.count} entries.` };
 }
 
@@ -561,5 +563,33 @@ export async function deleteReconciliationAction(
   }
   await prisma.reconciliation.delete({ where: { id: existing.id } });
   revalidatePath("/app/reconciliation");
+  revalidatePath("/app");
   return { ok: true, message: "Reconciliation deleted." };
+}
+
+export async function bulkDeleteReconciliationsAction(
+  formData: FormData,
+): Promise<ActionResult> {
+  const { organization, role } = await requireOrgContext("BOOKKEEPER");
+  if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
+  const ids = String(formData.get("ids") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (!ids.length) return { ok: false, error: "Select reconciliations first." };
+
+  const result = await prisma.reconciliation.deleteMany({
+    where: {
+      id: { in: ids },
+      organizationId: organization.id,
+      status: { not: "FINISHED" },
+    },
+  });
+  revalidatePath("/app/reconciliation");
+  revalidatePath("/app");
+  return {
+    ok: true,
+    count: result.count,
+    message: `Deleted ${result.count} reconciliation record${result.count === 1 ? "" : "s"}.`,
+  };
 }

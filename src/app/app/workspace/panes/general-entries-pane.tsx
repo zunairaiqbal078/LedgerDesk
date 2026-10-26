@@ -32,7 +32,6 @@ export default async function GeneralEntriesPane() {
       canEdit={canEditTransactions(role)}
       accounts={accounts.map((a) => ({ number: a.number, name: a.name }))}
       fiscalYearStartMonth={organization.fiscalYearStartMonth}
-      fiscalYearStartDay={organization.fiscalYearStartDay}
       defaultInputTaxAccount={
         defaultInputTax ? `${defaultInputTax.number}||${defaultInputTax.name}` : ""
       }

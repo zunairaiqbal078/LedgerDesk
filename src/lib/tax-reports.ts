@@ -24,6 +24,26 @@ function allTaxCodesForTx(tx: TxForTax) {
   return [...tx.taxCodes, ...(tx.provinceTaxCodes ?? [])];
 }
 
+/** Keep GST/HST/NONE/OTHER in taxCodes and PST/QST/RST in provinceTaxCodes. */
+export function normalizeTaxCodeAssignment(
+  taxCodes: string[],
+  provinceTaxCodes: string[],
+  catalog: Array<{ code: string; kind: string }>,
+): { taxCodes: string[]; provinceTaxCodes: string[] } {
+  const kindByCode = new Map(catalog.map((t) => [t.code, t.kind]));
+  const sales: string[] = [];
+  const pst: string[] = [];
+  const seen = new Set<string>();
+  for (const code of [...taxCodes, ...provinceTaxCodes]) {
+    const trimmed = String(code ?? "").trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    if (kindByCode.get(trimmed) === "PST") pst.push(trimmed);
+    else sales.push(trimmed);
+  }
+  return { taxCodes: sales, provinceTaxCodes: pst };
+}
+
 function federalRate(codes: TaxCodeInfo[]) {
   return codes.filter((c) => c.kind === "GST_HST").reduce((sum, c) => sum + Number(c.rate), 0);
 }

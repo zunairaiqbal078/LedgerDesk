@@ -13,6 +13,7 @@ import {
 } from "@/app/actions/accounting";
 import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
+import { jsPDF } from "jspdf";
 
 type Entry = {
   id: string;
@@ -41,21 +42,6 @@ type ManualLine = {
   debit: string;
   credit: string;
 };
-
-const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
 
 function money(n: number) {
   return `$${n.toLocaleString("en-CA", {
@@ -88,7 +74,6 @@ export function GeneralEntriesWorkspace({
   accounts,
   canEdit,
   fiscalYearStartMonth = 1,
-  fiscalYearStartDay = 1,
   defaultInputTaxAccount = "",
   defaultOutputTaxAccount = "",
 }: {
@@ -96,21 +81,23 @@ export function GeneralEntriesWorkspace({
   accounts: AccountOption[];
   canEdit: boolean;
   fiscalYearStartMonth?: number;
-  fiscalYearStartDay?: number;
   defaultInputTaxAccount?: string;
   defaultOutputTaxAccount?: string;
 }) {
-  const [periodType, setPeriodType] = useState("MONTHLY");
-  const [customStartDate, setCustomStartDate] = useState("");
-  const [customEndDate, setCustomEndDate] = useState("");
-  const [fiscalMonth, setFiscalMonth] = useState(String(fiscalYearStartMonth || 1));
-  const [fiscalDay, setFiscalDay] = useState(String(fiscalYearStartDay || 1));
+  const [customStartDate, setCustomStartDate] = useState(() => {
+    const y = new Date().getFullYear();
+    return `${y}-01-01`;
+  });
+  const [customEndDate, setCustomEndDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
   const [inputTaxAccount, setInputTaxAccount] = useState(defaultInputTaxAccount);
   const [outputTaxAccount, setOutputTaxAccount] = useState(defaultOutputTaxAccount);
   const [sortBy, setSortBy] = useState<"date" | "period" | "source" | "debit" | "credit">(
     "date",
   );
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const fiscalMonth = String(fiscalYearStartMonth || 1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingBulk, startBulk] = useTransition();
   const [showManual, setShowManual] = useState(false);
@@ -194,25 +181,11 @@ export function GeneralEntriesWorkspace({
   }, [manualLines]);
 
   const fiscalExplanation = useMemo(() => {
-    const month = MONTHS[Math.min(11, Math.max(0, Number(fiscalMonth) - 1))] ?? "January";
-    const day = Math.min(28, Math.max(1, Number(fiscalDay) || 1));
-    let txt = `Fiscal year starts ${month} ${day}. `;
-    if (periodType === "CUSTOM") {
-      txt +=
-        customStartDate && customEndDate
-          ? `Automatic entries will include only transactions from ${customStartDate} through ${customEndDate} and create summarized journal entries for that range.`
-          : "Choose a custom start date and end date to generate summarized journal entries for that range.";
-    } else if (periodType === "QUARTERLY") {
-      txt +=
-        "Quarter 1 begins on the fiscal-year start date and each quarter covers three fiscal months.";
-    } else if (periodType === "YEARLY") {
-      txt += "Yearly entries cover the full fiscal year, not January–December.";
-    } else {
-      txt +=
-        "Monthly entries are grouped by month and labeled within the applicable fiscal year.";
+    if (customStartDate && customEndDate) {
+      return `Automatic entries will include only transactions from ${customStartDate} through ${customEndDate} and create summarized journal entries for that range.`;
     }
-    return txt;
-  }, [fiscalMonth, fiscalDay, periodType, customStartDate, customEndDate]);
+    return "Choose a start date and end date to generate summarized journal entries for that range.";
+  }, [customStartDate, customEndDate]);
 
   function toggleAll() {
     setSelected((prev) => {
@@ -280,7 +253,7 @@ export function GeneralEntriesWorkspace({
       "general_entries.csv",
       new Blob([csv], { type: "text/csv;charset=utf-8" }),
     );
-    toast.success("CSV exported.");
+    toast.success("CSV downloaded.");
   }
 
   function exportExcel() {
@@ -293,7 +266,93 @@ export function GeneralEntriesWorkspace({
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "General Entries");
     XLSX.writeFile(wb, "general_entries.xlsx");
-    toast.success("Excel exported.");
+    toast.success("Excel downloaded.");
+  }
+
+  function exportPdf() {
+    const rows = flatExportRows();
+    if (!rows.length) {
+      toast.message("There are no general entries to export.");
+      return;
+    }
+    try {
+      const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+      const margin = 32;
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      let y = margin;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("General Entries", margin, y);
+      y += 16;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const rangeLabel =
+        customStartDate && customEndDate
+          ? `${customStartDate} → ${customEndDate}`
+          : "All generated entries";
+      doc.text(`Range: ${rangeLabel}`, margin, y);
+      doc.text(`Entries: ${sortedEntries.length}`, 360, y);
+      y += 14;
+      doc.text(`Total Debits: ${money(totalDebit)}`, margin, y);
+      doc.text(`Total Credits: ${money(totalCredit)}`, 360, y);
+      y += 20;
+
+      const cols = [
+        { label: "Entry", x: margin },
+        { label: "Date", x: margin + 50 },
+        { label: "Period", x: margin + 110 },
+        { label: "Source", x: margin + 200 },
+        { label: "Account", x: margin + 270 },
+        { label: "Memo", x: margin + 430 },
+        { label: "Debit", x: pageW - margin - 110 },
+        { label: "Credit", x: pageW - margin - 50 },
+      ];
+
+      const drawHeader = () => {
+        doc.setFillColor(238, 244, 248);
+        doc.rect(margin, y - 10, pageW - margin * 2, 16, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        cols.forEach((c) => doc.text(c.label, c.x, y));
+        y += 12;
+      };
+
+      drawHeader();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+
+      for (const row of rows) {
+        if (y > pageH - 40) {
+          doc.addPage();
+          y = margin;
+          drawHeader();
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+        }
+        const account = [row.AccountNumber, row.Account].filter(Boolean).join(" — ");
+        const memo = String(row.Memo || "").slice(0, 42);
+        doc.text(String(row.Entry), cols[0]!.x, y);
+        doc.text(String(row.Date), cols[1]!.x, y);
+        doc.text(String(row.Period || "—").slice(0, 14), cols[2]!.x, y);
+        doc.text(String(row.Source), cols[3]!.x, y);
+        doc.text(account.slice(0, 28), cols[4]!.x, y);
+        doc.text(memo, cols[5]!.x, y);
+        doc.text(money(Number(row.Debit) || 0), cols[6]!.x, y, { align: "right" });
+        doc.text(money(Number(row.Credit) || 0), cols[7]!.x, y, { align: "right" });
+        y += 12;
+      }
+
+      const rangePart =
+        customStartDate && customEndDate
+          ? `_${customStartDate}_to_${customEndDate}`
+          : "";
+      doc.save(`general_entries${rangePart}.pdf`);
+      toast.success("PDF downloaded.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "PDF failed");
+    }
   }
 
   function parseAccount(value: string) {
@@ -521,101 +580,53 @@ export function GeneralEntriesWorkspace({
             Generate balanced journals from categorized transactions, or create manual entries.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="toolbar-left flex flex-wrap gap-2">
           {canEdit ? (
             <form action={genAction} className="flex flex-wrap gap-2">
-              <input type="hidden" name="periodType" value={periodType} />
+              <input type="hidden" name="periodType" value="CUSTOM" />
               <input type="hidden" name="customStartDate" value={customStartDate} />
               <input type="hidden" name="customEndDate" value={customEndDate} />
               <input type="hidden" name="fiscalStartMonth" value={fiscalMonth} />
-              <input type="hidden" name="fiscalStartDay" value={fiscalDay} />
+              <input type="hidden" name="fiscalStartDay" value="1" />
               <input type="hidden" name="inputTaxAccount" value={inputTaxAccount} />
               <input type="hidden" name="outputTaxAccount" value={outputTaxAccount} />
-              <Button type="submit" disabled={genPending}>
+              <button type="submit" className="btn-converter btn-green" disabled={genPending}>
                 {genPending ? "Generating…" : "Generate Automatic Entries"}
-              </Button>
-              <Button type="button" variant="secondary" onClick={openManual}>
+              </button>
+              <button type="button" className="btn-converter btn-light" onClick={openManual}>
                 + Create General Entry
-              </Button>
-              <Button type="button" variant="secondary" onClick={exportCsv}>
-                Export CSV
-              </Button>
-              <Button type="button" variant="secondary" onClick={exportExcel}>
-                Export Excel
-              </Button>
+              </button>
             </form>
-          ) : (
-            <>
-              <Button type="button" variant="secondary" onClick={exportCsv}>
-                Export CSV
-              </Button>
-              <Button type="button" variant="secondary" onClick={exportExcel}>
-                Export Excel
-              </Button>
-            </>
-          )}
+          ) : null}
+          <button type="button" className="btn-converter btn-light" onClick={exportCsv}>
+            Download CSV
+          </button>
+          <button type="button" className="btn-converter btn-light" onClick={exportExcel}>
+            Download Excel
+          </button>
+          <button type="button" className="btn-converter btn-light" onClick={exportPdf}>
+            Download PDF
+          </button>
         </div>
       </div>
 
       <div className="ge-toolbar flex flex-wrap items-end gap-2">
-        <div className="min-w-[150px]">
-          <Label className="text-[11px]">Generate by</Label>
-          <Select
-            value={periodType}
-            onChange={(e) => setPeriodType(e.target.value)}
-            className="h-9"
-          >
-            <option value="MONTHLY">Monthly</option>
-            <option value="QUARTERLY">Quarterly</option>
-            <option value="YEARLY">Yearly</option>
-            <option value="CUSTOM">Custom Date Range</option>
-          </Select>
-        </div>
-        {periodType === "CUSTOM" ? (
-          <>
-            <div>
-              <Label className="text-[11px]">Custom start date</Label>
-              <Input
-                type="date"
-                className="h-9"
-                value={customStartDate}
-                onChange={(e) => setCustomStartDate(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label className="text-[11px]">Custom end date</Label>
-              <Input
-                type="date"
-                className="h-9"
-                value={customEndDate}
-                onChange={(e) => setCustomEndDate(e.target.value)}
-              />
-            </div>
-          </>
-        ) : null}
-        <div className="min-w-[150px]">
-          <Label className="text-[11px]">Fiscal year starts</Label>
-          <Select
-            value={fiscalMonth}
-            onChange={(e) => setFiscalMonth(e.target.value)}
-            className="h-9"
-          >
-            {MONTHS.map((m, i) => (
-              <option key={m} value={String(i + 1)}>
-                {m}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="w-[110px]">
-          <Label className="text-[11px]">Start day</Label>
+        <div>
+          <Label className="text-[11px]">Start date</Label>
           <Input
-            type="number"
-            min={1}
-            max={28}
+            type="date"
             className="h-9"
-            value={fiscalDay}
-            onChange={(e) => setFiscalDay(e.target.value)}
+            value={customStartDate}
+            onChange={(e) => setCustomStartDate(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label className="text-[11px]">End date</Label>
+          <Input
+            type="date"
+            className="h-9"
+            value={customEndDate}
+            onChange={(e) => setCustomEndDate(e.target.value)}
           />
         </div>
         <div className="min-w-[200px] flex-1">
@@ -709,21 +720,28 @@ export function GeneralEntriesWorkspace({
       </div>
 
       {canEdit && selected.size > 0 ? (
-        <Card className="flex flex-wrap items-center gap-3 border-rose-200 bg-rose-50/50 p-4">
-          <span className="text-sm font-semibold text-rose-900">{selected.size} selected</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="danger"
-            disabled={pendingBulk}
-            onClick={deleteSelected}
-          >
-            {pendingBulk ? "Deleting…" : "Delete selected"}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-            Clear
-          </Button>
-        </Card>
+        <div className="toolbar toolbar-secondary">
+          <div className="toolbar-secondary-row">
+            <button
+              type="button"
+              className="btn-converter btn-danger"
+              disabled={pendingBulk}
+              onClick={deleteSelected}
+            >
+              {pendingBulk ? "Deleting…" : "Delete Selected"}
+            </button>
+            <button
+              type="button"
+              className="btn-converter btn-light"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear All
+            </button>
+            <span className="selected-count-pill has-selection toolbar-selected-count">
+              {selected.size} selected
+            </span>
+          </div>
+        </div>
       ) : null}
 
       <DualScrollArea className="card-table">
@@ -731,13 +749,14 @@ export function GeneralEntriesWorkspace({
           <thead>
             <tr>
               {canEdit ? (
-                <th>
+                <th className="col-check">
                   <input
                     type="checkbox"
-                    className="h-4 w-4"
+                    id="selectAllGeneralEntries"
                     checked={allSelected}
                     onChange={toggleAll}
                     aria-label="Select all entries"
+                    title="Select all"
                   />
                 </th>
               ) : null}
@@ -794,11 +813,10 @@ export function GeneralEntriesWorkspace({
                       }`}
                     >
                       {canEdit ? (
-                        <td>
+                        <td className="col-check">
                           {isFirst ? (
                             <input
                               type="checkbox"
-                              className="h-4 w-4"
                               checked={selected.has(entry.id)}
                               onChange={() => toggleOne(entry.id)}
                               aria-label={`Select ${jeLabel}`}

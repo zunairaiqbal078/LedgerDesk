@@ -3,7 +3,7 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { PeriodCardTotals } from "@/lib/tax-report-pdf";
 
-type Frequency = "MONTHLY" | "QUARTERLY" | "YEARLY";
+type Frequency = "MONTHLY" | "QUARTERLY" | "YEARLY" | "CUSTOM";
 
 const METRIC_LABELS_GST = [
   ["Taxable Sales", "taxableSales"],
@@ -39,7 +39,11 @@ export function PeriodSummaryGrid({
   const searchParams = useSearchParams();
   const metrics = kind === "gst" ? METRIC_LABELS_GST : METRIC_LABELS_PST;
   const gridClass =
-    frequency === "YEARLY" ? "yearly" : frequency === "QUARTERLY" ? "quarterly" : "monthly";
+    frequency === "YEARLY" || frequency === "CUSTOM"
+      ? "yearly"
+      : frequency === "QUARTERLY"
+        ? "quarterly"
+        : "monthly";
 
   function selectPeriod(key: string) {
     const next = new URLSearchParams(searchParams.toString());

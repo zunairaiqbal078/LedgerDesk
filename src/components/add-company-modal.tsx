@@ -71,7 +71,7 @@ export function AddCompanyModal({ open, onClose }: { open: boolean; onClose: () 
               value={province}
               onChange={(e) => setProvince(e.target.value)}
             >
-              <option value="">— Select province —</option>
+              <option value="">None</option>
               {CANADIAN_PROVINCES.map(([code, label]) => (
                 <option key={code} value={code}>
                   {label} ({code})

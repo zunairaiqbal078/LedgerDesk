@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { TransactionRowPatch } from "@/app/actions/saves";
+import {
+  updateTransactionCategoryAction,
+  type TransactionRowPatch,
+} from "@/app/actions/saves";
 import { toast } from "sonner";
 import {
   applyRulesToTransactionsAction,
@@ -14,8 +17,16 @@ import {
 } from "@/app/actions/books";
 import {
   clearLoadedConversionContext,
+  downloadCsvFile,
+  downloadTextFile,
+  downloadTransactionsExcel,
+  exportFilename,
+  type ExportFormat,
   type LoadedConversionContext,
   REQUEST_NEW_CONVERSION_KEY,
+  transactionsToCsv,
+  transactionsToOfx,
+  transactionsToQbo,
   writeLoadedConversionContext,
 } from "@/lib/conversion-export";
 import { takePendingImportFiles } from "@/lib/pending-import";
@@ -209,30 +220,10 @@ export function TransactionsWorkspace({
           : row,
       ),
     );
-    setDirtyRowIds((prev) => {
-      const next = new Set(prev);
-      next.delete(patch.id);
-      return next;
-    });
   }, []);
 
-  const handleDirtyChange = useCallback((id: string, dirty: boolean) => {
-    setDirtyRowIds((prev) => {
-      const next = new Set(prev);
-      if (dirty) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }, []);
-
-  const registerRowSaver = useCallback((id: string, saver: () => Promise<boolean>) => {
-    rowSaversRef.current.set(id, saver);
-  }, []);
-
-  const unregisterRowSaver = useCallback((id: string) => {
-    rowSaversRef.current.delete(id);
-  }, []);
   const [query, setQuery] = useState("");
+  const [downloadFormat, setDownloadFormat] = useState<ExportFormat>("excel");
   const [importOpen, setImportOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [matrix, setMatrix] = useState<ImportMatrix | null>(null);
@@ -269,8 +260,8 @@ export function TransactionsWorkspace({
   const pendingImportFilesRef = useRef<File[] | null>(null);
   const replaceBeforeNextImportRef = useRef(false);
   const [taxPickerTxId, setTaxPickerTxId] = useState<string | null>(null);
-  const [dirtyRowIds, setDirtyRowIds] = useState<Set<string>>(new Set());
-  const rowSaversRef = useRef(new Map<string, () => Promise<boolean>>());
+  const [taxPickerMode, setTaxPickerMode] = useState<"gst" | "pst">("gst");
+  const [bulkEditFocus, setBulkEditFocus] = useState<"all" | "account" | "salesTax" | "pst">("all");
   const [moneySide, setMoneySide] = useState<"all" | "in" | "out" | "both">("all");
   const [sortBy, setSortBy] = useState("original");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -283,7 +274,10 @@ export function TransactionsWorkspace({
   }, []);
 
   const salesTaxOptions = useMemo(
-    () => taxCodes.filter((t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE"),
+    () =>
+      taxCodes.filter(
+        (t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER",
+      ),
     [taxCodes],
   );
   const provinceTaxOptions = useMemo(
@@ -1076,8 +1070,11 @@ export function TransactionsWorkspace({
 
   const taxPickerRow = taxPickerTxId ? rows.find((r) => r.id === taxPickerTxId) : null;
   const taxPickerSelected = taxPickerRow
-    ? [...taxPickerRow.taxCodes, ...taxPickerRow.provinceTaxCodes]
+    ? taxPickerMode === "pst"
+      ? taxPickerRow.provinceTaxCodes
+      : taxPickerRow.taxCodes
     : [];
+  const taxPickerOptions = taxPickerMode === "pst" ? provinceTaxOptions : salesTaxOptions;
 
   function runDeleteRow(id: string) {
     const formData = new FormData();
@@ -1106,6 +1103,64 @@ export function TransactionsWorkspace({
     });
   }
 
+  function rowsForDownload() {
+    if (selected.size) {
+      const picked = filtered.filter((tx) => selected.has(tx.id));
+      if (picked.length) return picked;
+    }
+    return filtered;
+  }
+
+  async function runDownload() {
+    const source = rowsForDownload();
+    if (!source.length) {
+      toast.error("No transactions to download.");
+      return;
+    }
+    const exportRows = source.map((tx) => ({
+      id: tx.id,
+      date: tx.date,
+      description: tx.description,
+      moneyIn: tx.moneyIn,
+      moneyOut: tx.moneyOut,
+      accountNumber: tx.accountNumber,
+      accountName: tx.accountName,
+      province: tx.province,
+      taxCodes: tx.taxCodes,
+      provinceTaxCodes: tx.provinceTaxCodes,
+      taxMode: tx.taxMode,
+      notes: tx.notes,
+      bankType: tx.bankType,
+    }));
+    const filename = exportFilename(downloadFormat);
+    const ofxOpts = {
+      accountId: bankName ?? activeBankId ?? "ledgerdesk",
+      bankId: "0000",
+      currency: "CAD",
+      accountType: (exportRows.find((r) => r.bankType)?.bankType ??
+        banks.find((b) => b.id === activeBankId)?.type ??
+        "BANK") as "BANK" | "CREDIT_CARD",
+    };
+    try {
+      if (downloadFormat === "csv") {
+        downloadCsvFile(filename, transactionsToCsv(exportRows));
+      } else if (downloadFormat === "excel") {
+        await downloadTransactionsExcel(filename, exportRows);
+      } else if (downloadFormat === "qbo") {
+        downloadTextFile(filename, transactionsToQbo(exportRows, ofxOpts), "application/vnd.intu.qbo");
+      } else {
+        downloadTextFile(filename, transactionsToOfx(exportRows, ofxOpts), "application/x-ofx");
+      }
+      const scope = selected.size && source.every((tx) => selected.has(tx.id))
+        ? `${source.length} selected`
+        : `${source.length} visible`;
+      toast.success(`Downloaded ${scope} as ${downloadFormat.toUpperCase()}.`);
+    } catch (error) {
+      console.error("[runDownload]", error);
+      toast.error("Download failed.");
+    }
+  }
+
   function runSwapDebitCredit() {
     const ids = selected.size ? [...selected] : filtered.map((tx) => tx.id);
     if (!ids.length) {
@@ -1132,37 +1187,51 @@ export function TransactionsWorkspace({
     });
   }
 
-  function applyTaxPicker(codes: string[]) {
-    if (!taxPickerTxId) return;
-    const sales = codes.filter((c) => {
-      const t = taxCodes.find((x) => x.code === c);
-      return !t?.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER";
-    });
-    const provinceCodes = codes.filter((c) => taxCodes.find((x) => x.code === c)?.kind === "PST");
-    setRows((prev) =>
-      prev.map((row) =>
-        row.id === taxPickerTxId
-          ? { ...row, taxCodes: sales, provinceTaxCodes: provinceCodes }
-          : row,
-      ),
-    );
-    setDirtyRowIds((prev) => new Set(prev).add(taxPickerTxId));
-    setTaxPickerTxId(null);
+  function openTaxPicker(txId: string, mode: "gst" | "pst") {
+    setTaxPickerMode(mode);
+    setTaxPickerTxId(txId);
   }
 
-  function saveAllChanges() {
-    const ids = [...dirtyRowIds];
-    if (!ids.length) return;
+  function applyTaxPicker(codes: string[]) {
+    if (!taxPickerTxId) return;
+    const txId = taxPickerTxId;
+    const mode = taxPickerMode;
+    const row = rows.find((r) => r.id === txId);
+    if (!row) {
+      setTaxPickerTxId(null);
+      return;
+    }
+    const allowed =
+      mode === "pst"
+        ? codes.filter((c) => taxCodes.find((x) => x.code === c)?.kind === "PST")
+        : codes.filter((c) => {
+            const t = taxCodes.find((x) => x.code === c);
+            return !t?.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER";
+          });
+    const nextSales = mode === "pst" ? row.taxCodes : allowed;
+    const nextPst = mode === "pst" ? allowed : row.provinceTaxCodes;
+    // Optimistic UI — persist immediately (bulk edit already does; single picker used to
+    // only mutate parent rows, which cleared dirty and never wrote to DB).
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === txId ? { ...r, taxCodes: nextSales, provinceTaxCodes: nextPst } : r,
+      ),
+    );
+    setTaxPickerTxId(null);
     startTransition(async () => {
-      let saved = 0;
-      for (const id of ids) {
-        const save = rowSaversRef.current.get(id);
-        if (save && (await save())) saved += 1;
-      }
-      if (saved > 0) {
-        toast.success(`Saved ${saved} change${saved === 1 ? "" : "s"}`);
+      const formData = new FormData();
+      formData.set("inline", "true");
+      formData.set("id", txId);
+      formData.set("taxCodes", nextSales.join(","));
+      formData.set("provinceTaxCodes", nextPst.join(","));
+      const result = await updateTransactionCategoryAction(undefined, formData);
+      if (result.ok && result.patch) {
+        handlePatched(result.patch);
+        toast.success(mode === "pst" ? "PST Code saved" : "Sales Tax Code saved");
         router.refresh();
-        setDirtyRowIds(new Set());
+      } else {
+        toast.error(result.error ?? "Tax code save failed");
+        router.refresh();
       }
     });
   }
@@ -1196,15 +1265,6 @@ export function TransactionsWorkspace({
                 <button
                   type="button"
                   className="btn-converter btn-light"
-                  id="duplicateSelected"
-                  onClick={() => runDuplicate([...selected])}
-                  disabled={!selected.size}
-                >
-                  Duplicate Selected
-                </button>
-                <button
-                  type="button"
-                  className="btn-converter btn-light"
                   id="swapDebitCreditBtn"
                   disabled={pending || (!selected.size && !filtered.length)}
                   onClick={runSwapDebitCredit}
@@ -1222,6 +1282,7 @@ export function TransactionsWorkspace({
                   id="applyRulesBtn"
                   disabled={pending}
                   onClick={runApplyRules}
+                  title="Match active rules to all transactions (overrides existing Account/Category)"
                 >
                   Apply Rules
                 </button>
@@ -1243,6 +1304,28 @@ export function TransactionsWorkspace({
                 </button>
               </>
             ) : null}
+            <div className="toolbar-sort" title="Selected rows if any, otherwise all visible">
+              <label htmlFor="downloadFormat">Download</label>
+              <select
+                id="downloadFormat"
+                value={downloadFormat}
+                onChange={(e) => setDownloadFormat(e.target.value as ExportFormat)}
+              >
+                <option value="excel">Excel (.xlsx)</option>
+                <option value="csv">CSV</option>
+                <option value="qbo">QBO (QuickBooks)</option>
+                <option value="ofx">OFX</option>
+              </select>
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="downloadTransactionsBtn"
+                disabled={!filtered.length}
+                onClick={() => void runDownload()}
+              >
+                Download
+              </button>
+            </div>
           </div>
           <div className="toolbar-right">
           <div className="toolbar-sort">
@@ -1295,53 +1378,75 @@ export function TransactionsWorkspace({
           </div>
         </div>
 
-        {canEdit ? (
+        {canEdit && selected.size > 0 ? (
           <div className="toolbar toolbar-secondary">
             <div className="toolbar-secondary-row">
               <button
                 type="button"
-                className={`btn-converter ${dirtyRowIds.size ? "btn-green" : "btn-light"}`}
-                id="saveChangesBtn"
-                disabled={!dirtyRowIds.size || pending}
-                onClick={saveAllChanges}
+                className="btn-converter btn-light"
+                id="deleteSelected"
+                onClick={() => setBulkDeleteOpen(true)}
               >
-                Save Changes
-                {dirtyRowIds.size ? ` (${dirtyRowIds.size})` : ""}
+                Delete Selected
               </button>
-              {selected.size > 0 ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn-converter btn-light"
-                    id="deleteSelected"
-                    onClick={() => setBulkDeleteOpen(true)}
-                  >
-                    Delete Selected
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-converter btn-light"
-                    id="bulkEditBtn"
-                    onClick={() => setBulkEditOpen(true)}
-                  >
-                    Bulk Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-converter btn-light"
-                    id="clearAll"
-                    onClick={clearSelection}
-                  >
-                    Clear All
-                  </button>
-                  <span
-                    className="selected-count-pill has-selection toolbar-selected-count"
-                    id="selectedTransactionCount"
-                  >
-                    {selected.size} selected
-                  </span>
-                </>
-              ) : null}
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="bulkEditBtn"
+                onClick={() => {
+                  setBulkEditFocus("all");
+                  setBulkEditOpen(true);
+                }}
+              >
+                Bulk Edit
+              </button>
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="bulkEditAccountBtn"
+                onClick={() => {
+                  setBulkEditFocus("account");
+                  setBulkEditOpen(true);
+                }}
+              >
+                Bulk Edit Account / Category
+              </button>
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="bulkEditSalesTaxBtn"
+                onClick={() => {
+                  setBulkEditFocus("salesTax");
+                  setBulkEditOpen(true);
+                }}
+              >
+                Bulk Edit Sales Tax Code
+              </button>
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="bulkEditPstBtn"
+                onClick={() => {
+                  setBulkEditFocus("pst");
+                  setBulkEditOpen(true);
+                }}
+              >
+                Bulk Edit PST Code
+              </button>
+              <button
+                type="button"
+                className="btn-converter btn-light"
+                id="clearAll"
+                onClick={clearSelection}
+              >
+                Clear All
+              </button>
+              <span
+                className="selected-count-pill has-selection toolbar-selected-count"
+                id="selectedTransactionCount"
+              >
+                {selected.size} selected
+              </span>
             </div>
           </div>
         ) : null}
@@ -1383,7 +1488,8 @@ export function TransactionsWorkspace({
               <th className="col-acctnum">Account Number</th>
               <th className="col-acct">Category / Account</th>
               <th className="col-province">Province</th>
-              <th className="col-tax">Sales Tax</th>
+              <th className="col-tax">Sales Tax Code</th>
+              <th className="col-tax">PST Code</th>
               <th className="col-taxmode">Tax Treatment</th>
               <th className="num col-amt">Tax Amount</th>
               <th
@@ -1406,10 +1512,8 @@ export function TransactionsWorkspace({
                 selected={selected.has(tx.id)}
                 onToggle={() => toggleOne(tx.id)}
                 onPatched={handlePatched}
-                onDirtyChange={handleDirtyChange}
-                registerRowSaver={registerRowSaver}
-                unregisterRowSaver={unregisterRowSaver}
-                onOpenTaxPicker={() => setTaxPickerTxId(tx.id)}
+                onOpenGstTaxPicker={() => openTaxPicker(tx.id, "gst")}
+                onOpenPstTaxPicker={() => openTaxPicker(tx.id, "pst")}
                 onCopyRow={() => runDuplicate([tx.id])}
                 onDeleteRow={() => runDeleteRow(tx.id)}
                 accounts={accounts}
@@ -1430,13 +1534,16 @@ export function TransactionsWorkspace({
 
       <TransactionTaxPickerModal
         open={!!taxPickerTxId}
-        taxOptions={taxCodes.map((t) => ({
+        mode={taxPickerMode}
+        taxOptions={taxPickerOptions.map((t) => ({
           code: t.code,
           name: t.name,
           rate: t.rate,
           kind: t.kind,
+          province: t.province,
         }))}
         selectedCodes={taxPickerSelected}
+        rowProvince={taxPickerRow?.province ?? null}
         onClose={() => setTaxPickerTxId(null)}
         onApply={applyTaxPicker}
       />
@@ -1492,6 +1599,7 @@ export function TransactionsWorkspace({
         accounts={accounts}
         taxCodes={taxCodes}
         taxCatalog={taxCatalog}
+        focusField={bulkEditFocus}
       />
 
       <BulkDeleteTransactionsModal

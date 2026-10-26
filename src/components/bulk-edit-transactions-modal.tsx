@@ -1,14 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { bulkCategorizeAction } from "@/app/actions/books";
-import { CANADIAN_PROVINCES } from "@/lib/canada-provinces";
-import type { TaxCodeInfo } from "@/lib/tax-reports";
-
 type Bank = { id: string; name: string; type: "BANK" | "CREDIT_CARD" };
 type Account = { number: string; name: string };
-type TaxOption = { code: string; kind?: string };
+type TaxOption = { code: string; kind?: string; name?: string };
 
 export function BulkEditTransactionsModal({
   open,
@@ -18,7 +15,7 @@ export function BulkEditTransactionsModal({
   banks,
   accounts,
   taxCodes,
-  taxCatalog,
+  focusField = "all",
 }: {
   open: boolean;
   onClose: () => void;
@@ -27,7 +24,8 @@ export function BulkEditTransactionsModal({
   banks: Bank[];
   accounts: Account[];
   taxCodes: TaxOption[];
-  taxCatalog: TaxCodeInfo[];
+  taxCatalog?: unknown;
+  focusField?: "all" | "account" | "salesTax" | "pst";
 }) {
   const [pending, startTransition] = useTransition();
   const [scope, setScope] = useState<"selected" | "all">(
@@ -35,25 +33,56 @@ export function BulkEditTransactionsModal({
   );
   const [applyPosting, setApplyPosting] = useState(false);
   const [applyAccount, setApplyAccount] = useState(false);
-  const [applyProvince, setApplyProvince] = useState(false);
-  const [applyTax, setApplyTax] = useState(false);
+  const [applySalesTax, setApplySalesTax] = useState(false);
+  const [applyPstTax, setApplyPstTax] = useState(false);
   const [applyTaxMode, setApplyTaxMode] = useState(false);
   const [bankAccountId, setBankAccountId] = useState(banks[0]?.id ?? "");
   const [accountNumber, setAccountNumber] = useState("");
   const [accountName, setAccountName] = useState("");
-  const [province, setProvince] = useState("");
-  const [selectedTaxes, setSelectedTaxes] = useState<string[]>([]);
+  const [selectedSalesTaxes, setSelectedSalesTaxes] = useState<string[]>([]);
+  const [selectedPstTaxes, setSelectedPstTaxes] = useState<string[]>([]);
   const [taxMode, setTaxMode] = useState<"INCLUSIVE" | "EXCLUSIVE">("INCLUSIVE");
 
-  const allTaxOptions = useMemo(
+  const salesTaxOptions = useMemo(
     () =>
-      taxCodes.map((t) => ({
-        code: t.code,
-        label: t.code,
-        kind: t.kind,
-      })),
+      taxCodes.filter(
+        (t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER",
+      ),
     [taxCodes],
   );
+  const pstTaxOptions = useMemo(
+    () => taxCodes.filter((t) => t.kind === "PST"),
+    [taxCodes],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setScope(selectedIds.length ? "selected" : "all");
+    setApplyPosting(false);
+    setApplyAccount(false);
+    setApplyTaxMode(false);
+    setSelectedSalesTaxes([]);
+    setSelectedPstTaxes([]);
+    setAccountNumber("");
+    setAccountName("");
+    if (focusField === "salesTax") {
+      setApplyAccount(false);
+      setApplySalesTax(true);
+      setApplyPstTax(false);
+    } else if (focusField === "pst") {
+      setApplyAccount(false);
+      setApplySalesTax(false);
+      setApplyPstTax(true);
+    } else if (focusField === "account") {
+      setApplyAccount(true);
+      setApplySalesTax(false);
+      setApplyPstTax(false);
+    } else {
+      setApplyAccount(false);
+      setApplySalesTax(false);
+      setApplyPstTax(false);
+    }
+  }, [open, focusField, selectedIds.length]);
 
   if (!open) return null;
 
@@ -70,7 +99,7 @@ export function BulkEditTransactionsModal({
   }
 
   function apply() {
-    const flags = [applyPosting, applyAccount, applyProvince, applyTax, applyTaxMode];
+    const flags = [applyPosting, applyAccount, applySalesTax, applyPstTax, applyTaxMode];
     if (!flags.some(Boolean)) {
       toast.error("Choose at least one field to bulk edit.");
       return;
@@ -78,14 +107,6 @@ export function BulkEditTransactionsModal({
     if (scope === "selected" && selectedIds.length === 0) {
       toast.error("No selected transactions to bulk edit.");
       return;
-    }
-
-    const salesSelected: string[] = [];
-    const provinceSelected: string[] = [];
-    for (const code of selectedTaxes) {
-      const meta = taxCatalog.find((t) => t.code === code);
-      if (meta?.kind === "PST") provinceSelected.push(code);
-      else salesSelected.push(code);
     }
 
     const formData = new FormData();
@@ -101,18 +122,13 @@ export function BulkEditTransactionsModal({
       formData.set("accountNumber", accountNumber);
       formData.set("accountName", accountName);
     }
-    if (applyProvince) {
-      formData.set("applyProvince", "true");
-      formData.set("province", province);
+    if (applySalesTax) {
+      formData.set("applySalesTax", "true");
+      formData.set("taxCodes", selectedSalesTaxes.join(","));
     }
-    if (applyTax) {
-      if (selectedTaxes.length === 0) {
-        toast.error("Choose at least one sales tax code.");
-        return;
-      }
-      formData.set("applyTax", "true");
-      formData.set("taxCodes", salesSelected.join(","));
-      formData.set("provinceTaxCodes", provinceSelected.join(","));
+    if (applyPstTax) {
+      formData.set("applyPstTax", "true");
+      formData.set("provinceTaxCodes", selectedPstTaxes.join(","));
     }
     if (applyTaxMode) {
       formData.set("applyTaxMode", "true");
@@ -128,11 +144,20 @@ export function BulkEditTransactionsModal({
     });
   }
 
+  const title =
+    focusField === "salesTax"
+      ? "Bulk Edit Sales Tax Code"
+      : focusField === "pst"
+        ? "Bulk Edit PST Code"
+        : focusField === "account"
+          ? "Bulk Edit Account / Category"
+          : "Bulk Edit Transactions";
+
   return (
     <div className="modal open">
       <div className="modal-card" style={{ width: "min(760px, 96vw)" }}>
         <div className="modal-head">
-          <h3>Bulk Edit Transactions</h3>
+          <h3>{title}</h3>
           <button type="button" className="btn-converter btn-light btn-sm" onClick={onClose}>
             Close
           </button>
@@ -146,119 +171,157 @@ export function BulkEditTransactionsModal({
             </select>
           </div>
           <div className="bulk-grid">
-            <div className="field">
-              <label className="bulk-check">
-                <input
-                  type="checkbox"
-                  checked={applyPosting}
-                  onChange={(e) => setApplyPosting(e.target.checked)}
-                />
-                Posting Bank / Credit Card Account
-              </label>
-              <select value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)}>
-                {banks.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} ({b.type === "BANK" ? "Bank" : "Credit Card"})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label className="bulk-check">
-                <input
-                  type="checkbox"
-                  checked={applyAccount}
-                  onChange={(e) => setApplyAccount(e.target.checked)}
-                />
-                Account / Category
-              </label>
-              <select value={accountNumber} onChange={(e) => syncAccountFromNumber(e.target.value)}>
-                <option value="">— Account number —</option>
-                {accounts.map((a) => (
-                  <option key={a.number} value={a.number}>
-                    {a.number}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="mt-2"
-                value={accountName}
-                onChange={(e) => syncAccountFromName(e.target.value)}
-              >
-                <option value="">— Category / account —</option>
-                {accounts.map((a) => (
-                  <option key={`${a.number}-${a.name}`} value={a.name}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label className="bulk-check">
-                <input
-                  type="checkbox"
-                  checked={applyProvince}
-                  onChange={(e) => setApplyProvince(e.target.checked)}
-                />
-                Province / Apply PST
-              </label>
-              <select value={province} onChange={(e) => setProvince(e.target.value)}>
-                <option value="">— Select province —</option>
-                {CANADIAN_PROVINCES.map(([code, name]) => (
-                  <option key={code} value={code}>
-                    {code} — {name}
-                  </option>
-                ))}
-              </select>
-              <p className="hint mt-1">
-                Selecting a province applies its linked PST/QST/RST code and preserves GST/HST.
-              </p>
-            </div>
-            <div className="field">
-              <label className="bulk-check">
-                <input
-                  type="checkbox"
-                  checked={applyTax}
-                  onChange={(e) => setApplyTax(e.target.checked)}
-                />
-                Sales Tax Code(s)
-              </label>
-              <select
-                multiple
-                size={5}
-                value={selectedTaxes}
-                onChange={(e) => {
-                  setSelectedTaxes(Array.from(e.target.selectedOptions, (o) => o.value));
-                }}
-              >
-                {allTaxOptions.map((t) => (
-                  <option key={t.code} value={t.code}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label className="bulk-check">
-                <input
-                  type="checkbox"
-                  checked={applyTaxMode}
-                  onChange={(e) => setApplyTaxMode(e.target.checked)}
-                />
-                Tax Treatment
-              </label>
-              <select
-                value={taxMode}
-                onChange={(e) => setTaxMode(e.target.value as "INCLUSIVE" | "EXCLUSIVE")}
-              >
-                <option value="INCLUSIVE">Inclusive — amount includes tax</option>
-                <option value="EXCLUSIVE">Exclusive — amount is before tax</option>
-              </select>
-            </div>
+            {focusField === "all" ? (
+              <div className="field">
+                <label className="bulk-check">
+                  <input
+                    type="checkbox"
+                    checked={applyPosting}
+                    onChange={(e) => setApplyPosting(e.target.checked)}
+                  />
+                  Posting Bank / Credit Card Account
+                </label>
+                <select value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)}>
+                  {banks.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.type === "BANK" ? "Bank" : "Credit Card"})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {focusField === "all" || focusField === "account" ? (
+              <div className="field">
+                <label className="bulk-check">
+                  <input
+                    type="checkbox"
+                    checked={applyAccount}
+                    onChange={(e) => setApplyAccount(e.target.checked)}
+                  />
+                  Account / Category
+                </label>
+                <select
+                  value={accountNumber}
+                  onChange={(e) => {
+                    syncAccountFromNumber(e.target.value);
+                    setApplyAccount(true);
+                  }}
+                >
+                  <option value="">— Account number —</option>
+                  {accounts.map((a) => (
+                    <option key={a.number} value={a.number}>
+                      {a.number}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="mt-2"
+                  value={accountName}
+                  onChange={(e) => {
+                    syncAccountFromName(e.target.value);
+                    setApplyAccount(true);
+                  }}
+                >
+                  <option value="">— Category / account —</option>
+                  {accounts.map((a) => (
+                    <option key={`${a.number}-${a.name}`} value={a.name}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                {focusField === "account" ? (
+                  <p className="hint mt-1">
+                    Sets Account Number and Category / Account on the chosen transactions. Leave
+                    blank to clear.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {focusField === "all" || focusField === "salesTax" ? (
+              <div className="field">
+                <label className="bulk-check">
+                  <input
+                    type="checkbox"
+                    checked={applySalesTax}
+                    onChange={(e) => setApplySalesTax(e.target.checked)}
+                  />
+                  Sales Tax Code — GST / HST only
+                </label>
+                <select
+                  multiple
+                  size={6}
+                  value={selectedSalesTaxes}
+                  onChange={(e) => {
+                    setSelectedSalesTaxes(Array.from(e.target.selectedOptions, (o) => o.value));
+                    setApplySalesTax(true);
+                  }}
+                >
+                  {salesTaxOptions.map((t) => (
+                    <option key={t.code} value={t.code}>
+                      {t.code}
+                      {t.name ? ` — ${t.name}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="hint mt-1">Province PST/QST/RST codes are not listed here.</p>
+              </div>
+            ) : null}
+
+            {focusField === "all" || focusField === "pst" ? (
+              <div className="field">
+                <label className="bulk-check">
+                  <input
+                    type="checkbox"
+                    checked={applyPstTax}
+                    onChange={(e) => setApplyPstTax(e.target.checked)}
+                  />
+                  PST Code — province tax only
+                </label>
+                <select
+                  multiple
+                  size={6}
+                  value={selectedPstTaxes}
+                  onChange={(e) => {
+                    setSelectedPstTaxes(Array.from(e.target.selectedOptions, (o) => o.value));
+                    setApplyPstTax(true);
+                  }}
+                >
+                  {pstTaxOptions.map((t) => (
+                    <option key={t.code} value={t.code}>
+                      {t.code}
+                      {t.name ? ` — ${t.name}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="hint mt-1">These feed PST Calculation only.</p>
+              </div>
+            ) : null}
+
+            {focusField === "all" ? (
+              <div className="field">
+                <label className="bulk-check">
+                  <input
+                    type="checkbox"
+                    checked={applyTaxMode}
+                    onChange={(e) => setApplyTaxMode(e.target.checked)}
+                  />
+                  Tax Treatment
+                </label>
+                <select
+                  value={taxMode}
+                  onChange={(e) => setTaxMode(e.target.value as "INCLUSIVE" | "EXCLUSIVE")}
+                >
+                  <option value="INCLUSIVE">Inclusive — amount includes tax</option>
+                  <option value="EXCLUSIVE">Exclusive — amount is before tax</option>
+                </select>
+              </div>
+            ) : null}
           </div>
           <p className="hint">
-            Inclusive backs tax out of the transaction amount. Exclusive calculates tax on top of
-            the entered amount. Net Amount is always the amount excluding tax.
+            GST/HST and PST are stored separately so GST Calculation and PST Calculation stay
+            accurate.
           </p>
         </div>
         <div className="modal-foot">

@@ -1,4 +1,4 @@
-/** CSV export for converted / saved transaction rows (QuickBooks-style columns). */
+/** Export helpers for converted / saved transaction rows (CSV, Excel, OFX, QBO). */
 
 export type ExportTransactionRow = {
   date: string;
@@ -12,6 +12,19 @@ export type ExportTransactionRow = {
   provinceTaxCodes?: string[];
   taxMode?: string;
   notes?: string | null;
+  id?: string;
+  bankType?: "BANK" | "CREDIT_CARD";
+};
+
+export type ExportFormat = "csv" | "excel" | "ofx" | "qbo";
+
+export type OfxExportOptions = {
+  accountId?: string;
+  bankId?: string;
+  currency?: string;
+  accountType?: "BANK" | "CREDIT_CARD";
+  /** Intuit FI id for .qbo Web Connect */
+  intuBid?: string;
 };
 
 function csvCell(value: string | number | null | undefined) {
@@ -20,51 +33,248 @@ function csvCell(value: string | number | null | undefined) {
   return raw;
 }
 
+function exportTableRows(rows: ExportTransactionRow[]) {
+  return rows.map((row) => [
+    row.date,
+    row.description,
+    row.moneyIn,
+    row.moneyOut,
+    row.accountNumber ?? "",
+    row.accountName ?? "",
+    row.province ?? "",
+    (row.taxCodes ?? []).join(";"),
+    (row.provinceTaxCodes ?? []).join(";"),
+    row.taxMode ?? "",
+    row.notes ?? "",
+  ]);
+}
+
+const EXPORT_HEADERS = [
+  "Date",
+  "Description",
+  "Money In",
+  "Money Out",
+  "Account Number",
+  "Account Name",
+  "Province",
+  "Sales Tax Codes",
+  "Province Tax Codes",
+  "Tax Mode",
+  "Notes",
+] as const;
+
 export function transactionsToCsv(rows: ExportTransactionRow[]) {
-  const header = [
-    "Date",
-    "Description",
-    "Money In",
-    "Money Out",
-    "Account Number",
-    "Account Name",
-    "Province",
-    "Sales Tax Codes",
-    "Province Tax Codes",
-    "Tax Mode",
-    "Notes",
-  ];
-  const lines = [header.join(",")];
-  for (const row of rows) {
-    lines.push(
-      [
-        row.date,
-        row.description,
-        row.moneyIn,
-        row.moneyOut,
-        row.accountNumber ?? "",
-        row.accountName ?? "",
-        row.province ?? "",
-        (row.taxCodes ?? []).join(";"),
-        (row.provinceTaxCodes ?? []).join(";"),
-        row.taxMode ?? "",
-        row.notes ?? "",
-      ]
-        .map(csvCell)
-        .join(","),
-    );
+  const lines = [EXPORT_HEADERS.join(",")];
+  for (const cells of exportTableRows(rows)) {
+    lines.push(cells.map(csvCell).join(","));
   }
   return lines.join("\n");
 }
 
-export function downloadCsvFile(filename: string, csv: string) {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+function ofxDate(isoDate: string) {
+  const digits = isoDate.replace(/[^0-9]/g, "");
+  if (digits.length >= 8) return `${digits.slice(0, 8)}000000`;
+  const d = new Date(isoDate);
+  if (Number.isNaN(d.getTime())) return "19700101000000";
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}${m}${day}000000`;
+}
+
+function ofxAmount(row: ExportTransactionRow) {
+  const moneyIn = Number(row.moneyIn) || 0;
+  const moneyOut = Number(row.moneyOut) || 0;
+  if (moneyIn > 0 && moneyOut <= 0) return moneyIn;
+  if (moneyOut > 0 && moneyIn <= 0) return -moneyOut;
+  return moneyIn - moneyOut;
+}
+
+function ofxEscape(value: string) {
+  return value.replace(/[<>&]/g, " ").replace(/\s+/g, " ").trim().slice(0, 255);
+}
+
+function fitIdForRow(row: ExportTransactionRow, index: number) {
+  if (row.id) return row.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 32) || `LD${index + 1}`;
+  return `LD${index + 1}`;
+}
+
+/** OFX SGML (bank or credit card). QBO is the same payload with Intuit metadata. */
+export function transactionsToOfx(
+  rows: ExportTransactionRow[],
+  options?: OfxExportOptions & { qbo?: boolean },
+) {
+  const creditCard =
+    options?.accountType === "CREDIT_CARD" ||
+    rows.some((r) => r.bankType === "CREDIT_CARD");
+  const currency = options?.currency ?? "CAD";
+  const acctId = ofxEscape(options?.accountId || "0000");
+  const bankId = ofxEscape(options?.bankId || "0000");
+  const dates = rows.map((r) => ofxDate(r.date)).sort();
+  const dtStart = dates[0] ?? ofxDate(new Date().toISOString());
+  const dtEnd = dates[dates.length - 1] ?? dtStart;
+  const dtserver = ofxDate(new Date().toISOString());
+
+  const stmtTrns = rows
+    .map((row, index) => {
+      const amt = ofxAmount(row);
+      const trnType = amt >= 0 ? "CREDIT" : "DEBIT";
+      const name = ofxEscape(row.description || "Transaction");
+      const memoParts = [row.accountName, row.notes].filter(Boolean).join(" — ");
+      const memo = memoParts ? `\n<MEMO>${ofxEscape(memoParts)}` : "";
+      return `<STMTTRN>
+<TRNTYPE>${trnType}
+<DTPOSTED>${ofxDate(row.date)}
+<TRNAMT>${amt.toFixed(2)}
+<FITID>${fitIdForRow(row, index)}
+<NAME>${name}${memo}
+</STMTTRN>`;
+    })
+    .join("\n");
+
+  const accountBlock = creditCard
+    ? `<CCACCTFROM>
+<ACCTID>${acctId}
+</CCACCTFROM>`
+    : `<BANKACCTFROM>
+<BANKID>${bankId}
+<ACCTID>${acctId}
+<ACCTTYPE>CHECKING
+</BANKACCTFROM>`;
+
+  const msgWrapper = creditCard
+    ? `<CREDITCARDMSGSRSV1>
+<CCSTMTTRNRS>
+<TRNUID>1
+<STATUS>
+<CODE>0
+<SEVERITY>INFO
+</STATUS>
+<CCSTMTRS>
+<CURDEF>${currency}
+${accountBlock}
+<BANKTRANLIST>
+<DTSTART>${dtStart}
+<DTEND>${dtEnd}
+${stmtTrns}
+</BANKTRANLIST>
+</CCSTMTRS>
+</CCSTMTTRNRS>
+</CREDITCARDMSGSRSV1>`
+    : `<BANKMSGSRSV1>
+<STMTTRNRS>
+<TRNUID>1
+<STATUS>
+<CODE>0
+<SEVERITY>INFO
+</STATUS>
+<STMTRS>
+<CURDEF>${currency}
+${accountBlock}
+<BANKTRANLIST>
+<DTSTART>${dtStart}
+<DTEND>${dtEnd}
+${stmtTrns}
+</BANKTRANLIST>
+</STMTRS>
+</STMTTRNRS>
+</BANKMSGSRSV1>`;
+
+  const intuBid = options?.intuBid ?? "00000";
+  const fiBlock = options?.qbo
+    ? `<FI>
+<ORG>LedgerDesk
+<FID>${ofxEscape(intuBid)}
+</FI>
+`
+    : "";
+
+  const header = [
+    "OFXHEADER:100",
+    "DATA:OFXSGML",
+    "VERSION:102",
+    "SECURITY:NONE",
+    "ENCODING:USASCII",
+    "CHARSET:1252",
+    "COMPRESSION:NONE",
+    "OLDFILEUID:NONE",
+    "NEWFILEUID:NONE",
+    ...(options?.qbo ? [`INTU.BID:${intuBid}`] : []),
+    "",
+  ].join("\n");
+
+  return `${header}
+<OFX>
+<SIGNONMSGSRSV1>
+<SONRS>
+<STATUS>
+<CODE>0
+<SEVERITY>INFO
+</STATUS>
+<DTSERVER>${dtserver}
+<LANGUAGE>ENG
+${fiBlock}</SONRS>
+</SIGNONMSGSRSV1>
+${msgWrapper}
+</OFX>
+`;
+}
+
+export function transactionsToQbo(rows: ExportTransactionRow[], options?: OfxExportOptions) {
+  return transactionsToOfx(rows, { ...options, qbo: true });
+}
+
+export function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadCsvFile(filename: string, csv: string) {
+  downloadBlob(filename, new Blob([csv], { type: "text/csv;charset=utf-8" }));
+}
+
+export function downloadTextFile(
+  filename: string,
+  text: string,
+  mime = "application/octet-stream",
+) {
+  downloadBlob(filename, new Blob([text], { type: mime }));
+}
+
+export async function downloadTransactionsExcel(
+  filename: string,
+  rows: ExportTransactionRow[],
+) {
+  const XLSX = await import("xlsx");
+  const sheet = XLSX.utils.aoa_to_sheet([
+    [...EXPORT_HEADERS],
+    ...exportTableRows(rows),
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Transactions");
+  XLSX.writeFile(wb, filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`);
+}
+
+export function exportFilename(format: ExportFormat, stamp = new Date()) {
+  const y = stamp.getFullYear();
+  const m = String(stamp.getMonth() + 1).padStart(2, "0");
+  const d = String(stamp.getDate()).padStart(2, "0");
+  const base = `ledgerdesk-transactions-${y}-${m}-${d}`;
+  switch (format) {
+    case "excel":
+      return `${base}.xlsx`;
+    case "qbo":
+      return `${base}.qbo`;
+    case "ofx":
+      return `${base}.ofx`;
+    case "csv":
+    default:
+      return `${base}.csv`;
+  }
 }
 
 export const PREFERRED_FOLDER_STORAGE_KEY = "ledgerdesk:preferred-folder";
