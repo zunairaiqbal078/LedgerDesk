@@ -2,17 +2,30 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { CONVERTER_EVENTS, dispatchConverterEvent } from "@/lib/converter-events";
-import { setActiveBankAction, switchActiveOrganizationAction } from "@/app/actions/org";
+import {
+  deleteClientOrganizationAction,
+  deleteMyBusinessCompanyAction,
+  setActiveBankAction,
+  switchActiveOrganizationAction,
+  type ActionResult,
+} from "@/app/actions/org";
 import { AddClientModal } from "@/components/add-client-modal";
 import { AddCompanyModal } from "@/components/add-company-modal";
-import type { OrganizationKind } from "@prisma/client";
+import {
+  EditClientModal,
+  type EditableClient,
+} from "@/components/edit-client-modal";
+import {
+  EditCompanyModal,
+  type EditableCompany,
+} from "@/components/edit-company-modal";
+import type { OrganizationKind, OrgRole } from "@prisma/client";
 import { Badge } from "@/components/ui";
 import { canSeeClientWorkspace, canSeeLicensePanel } from "@/lib/permissions";
-import type { OrgRole } from "@prisma/client";
 import { CollapsibleSection } from "@/components/converter/collapsible-section";
 import { preferredFolderStorageKey } from "@/lib/conversion-export";
 import { isImportBusyStatus, stashPendingImportFiles } from "@/lib/pending-import";
@@ -160,6 +173,8 @@ export function ConverterSidebar({
   activeOrganizationId,
   userOrganizations,
   orgRole,
+  editableClient = null,
+  editableCompany = null,
   banks,
   activeBankId,
   folders,
@@ -177,6 +192,8 @@ export function ConverterSidebar({
   activeOrganizationId: string;
   userOrganizations: UserOrganization[];
   orgRole: OrgRole;
+  editableClient?: EditableClient | null;
+  editableCompany?: EditableCompany | null;
   banks: Bank[];
   activeBankId: string | null;
   folders: Folder[];
@@ -203,7 +220,35 @@ export function ConverterSidebar({
   const [ocrPdfFallback, setOcrPdfFallback] = useState(true);
   const [preferredFolderId, setPreferredFolderId] = useState("");
   const [addClientOpen, setAddClientOpen] = useState(false);
+  const [editClientOpen, setEditClientOpen] = useState(false);
   const [addCompanyOpen, setAddCompanyOpen] = useState(false);
+  const [editCompanyOpen, setEditCompanyOpen] = useState(false);
+  const [deleteState, deleteAction, deletePending] = useActionState<
+    ActionResult | undefined,
+    FormData
+  >(deleteClientOrganizationAction, undefined);
+  const [deleteCompanyState, deleteCompanyAction, deleteCompanyPending] = useActionState<
+    ActionResult | undefined,
+    FormData
+  >(deleteMyBusinessCompanyAction, undefined);
+
+  useEffect(() => {
+    if (deleteState?.ok) {
+      toast.success(deleteState.message ?? "Client deleted");
+      router.refresh();
+    } else if (deleteState?.error) {
+      toast.error(deleteState.error);
+    }
+  }, [deleteState, router]);
+
+  useEffect(() => {
+    if (deleteCompanyState?.ok) {
+      toast.success(deleteCompanyState.message ?? "Company deleted");
+      router.refresh();
+    } else if (deleteCompanyState?.error) {
+      toast.error(deleteCompanyState.error);
+    }
+  }, [deleteCompanyState, router]);
 
   useEffect(() => {
     const key = preferredFolderStorageKey(activeOrganizationId);
@@ -558,8 +603,40 @@ export function ConverterSidebar({
             {canManageMyCompanies ? (
               <div className="mt-2 space-y-2 border-t border-[#e8eef2] pt-2">
                 <label className="block text-[11px] font-semibold text-[#52697a]">
-                  Add company
+                  Manage companies
                 </label>
+                {editableCompany ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditCompanyOpen(true)}
+                      className="rounded-lg border border-[#d6e1e9] bg-[#f6f9fb] px-2 py-1.5 text-xs font-semibold hover:bg-[#eef3f7]"
+                    >
+                      Edit company
+                    </button>
+                    <form
+                      action={deleteCompanyAction}
+                      onSubmit={(e) => {
+                        if (
+                          !confirm(
+                            `Delete company “${editableCompany.name}”? This permanently removes its books, transactions, folders, and hired accountants for this company only.`,
+                          )
+                        ) {
+                          e.preventDefault();
+                        }
+                      }}
+                    >
+                      <input type="hidden" name="companyId" value={editableCompany.id} />
+                      <button
+                        type="submit"
+                        disabled={deleteCompanyPending}
+                        className="w-full rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        {deleteCompanyPending ? "Deleting…" : "Delete company"}
+                      </button>
+                    </form>
+                  </div>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setAddCompanyOpen(true)}
@@ -571,7 +648,45 @@ export function ConverterSidebar({
             ) : null}
             {canManageClients && !isSuperAdmin ? (
               <div className="mt-2 space-y-2 border-t border-[#e8eef2] pt-2">
-                <label className="block text-[11px] font-semibold text-[#52697a]">Add client</label>
+                <label className="block text-[11px] font-semibold text-[#52697a]">
+                  Manage clients
+                </label>
+                {editableClient ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditClientOpen(true)}
+                      className="rounded-lg border border-[#d6e1e9] bg-[#f6f9fb] px-2 py-1.5 text-xs font-semibold hover:bg-[#eef3f7]"
+                    >
+                      Edit client
+                    </button>
+                    <form
+                      action={deleteAction}
+                      onSubmit={(e) => {
+                        if (
+                          !confirm(
+                            `Delete client “${editableClient.name}”? This permanently removes their books, transactions, folders, and saves.`,
+                          )
+                        ) {
+                          e.preventDefault();
+                        }
+                      }}
+                    >
+                      <input type="hidden" name="clientId" value={editableClient.id} />
+                      <button
+                        type="submit"
+                        disabled={deletePending}
+                        className="w-full rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        {deletePending ? "Deleting…" : "Delete client"}
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-[#52697a]">
+                    Select a client above to edit or delete it.
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => setAddClientOpen(true)}
@@ -705,7 +820,17 @@ export function ConverterSidebar({
         </button>
       </div>
       <AddClientModal open={addClientOpen} onClose={() => setAddClientOpen(false)} />
+      <EditClientModal
+        open={editClientOpen}
+        onClose={() => setEditClientOpen(false)}
+        client={editableClient}
+      />
       <AddCompanyModal open={addCompanyOpen} onClose={() => setAddCompanyOpen(false)} />
+      <EditCompanyModal
+        open={editCompanyOpen}
+        onClose={() => setEditCompanyOpen(false)}
+        company={editableCompany}
+      />
     </div>
   );
 }

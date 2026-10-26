@@ -343,6 +343,131 @@ export async function createMyBusinessCompanyAction(
   };
 }
 
+async function resolveOwnedSoloCompany(userId: string, companyId: string) {
+  return prisma.membership.findFirst({
+    where: {
+      userId,
+      role: "OWNER",
+      organizationId: companyId,
+      organization: {
+        kind: "CLIENT",
+        firmOrganizationId: null,
+      },
+    },
+    include: {
+      organization: { select: { id: true, name: true } },
+    },
+  });
+}
+
+export async function updateMyBusinessCompanyAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireSession();
+  const companyId = String(formData.get("companyId") ?? "");
+  if (!companyId) return { ok: false, error: "Missing company." };
+
+  const owned = await resolveOwnedSoloCompany(session.user.id, companyId);
+  if (!owned) {
+    return { ok: false, error: "You can only edit companies you own." };
+  }
+
+  const parsed = myBusinessCompanySchema.safeParse({
+    name: formData.get("name"),
+    province: String(formData.get("province") ?? "").trim() || undefined,
+  });
+  if (!parsed.success) {
+    return { ok: false, error: "Please enter a valid company name." };
+  }
+
+  const provinceRaw = parsed.data.province ? normalizeProvince(parsed.data.province) : "";
+
+  await prisma.organization.update({
+    where: { id: companyId },
+    data: {
+      name: parsed.data.name,
+      defaultProvince: provinceRaw || null,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: companyId,
+      actorId: session.user.id,
+      action: "company.updated",
+      entityType: "Organization",
+      entityId: companyId,
+      metadata: { name: parsed.data.name, province: provinceRaw || null },
+    },
+  });
+
+  revalidatePath("/app");
+  return { ok: true, message: `Company “${parsed.data.name}” updated.` };
+}
+
+export async function deleteMyBusinessCompanyAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireSession();
+  const companyId = String(formData.get("companyId") ?? "");
+  if (!companyId) return { ok: false, error: "Missing company." };
+
+  const owned = await resolveOwnedSoloCompany(session.user.id, companyId);
+  if (!owned) {
+    return { ok: false, error: "You can only delete companies you own." };
+  }
+
+  const otherCompany = await prisma.membership.findFirst({
+    where: {
+      userId: session.user.id,
+      role: "OWNER",
+      organizationId: { not: companyId },
+      organization: {
+        kind: "CLIENT",
+        firmOrganizationId: null,
+        isActive: true,
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { organizationId: true },
+  });
+
+  if (!otherCompany) {
+    return {
+      ok: false,
+      error: "You can’t delete your only company. Add another company first, or keep this one.",
+    };
+  }
+
+  const companyName = owned.organization.name;
+
+  await prisma.userPreference.updateMany({
+    where: { activeOrganizationId: companyId },
+    data: {
+      activeOrganizationId: otherCompany.organizationId,
+      activeBankAccountId: null,
+    },
+  });
+
+  await prisma.organization.delete({ where: { id: companyId } });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: otherCompany.organizationId,
+      actorId: session.user.id,
+      action: "company.deleted",
+      entityType: "Organization",
+      entityId: companyId,
+      metadata: { name: companyName },
+    },
+  });
+
+  revalidatePath("/app");
+  return { ok: true, message: `Company “${companyName}” deleted.` };
+}
+
 const teamMemberSchema = z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
@@ -1085,6 +1210,163 @@ export async function createClientOrganizationAction(
   return {
     ok: true,
     message: `Client “${client.name}” created${provinceRaw ? ` (${provinceRaw})` : ""}.`,
+  };
+}
+
+async function resolveFirmAdminForClient(userId: string, clientOrganizationId: string) {
+  const client = await prisma.organization.findFirst({
+    where: {
+      id: clientOrganizationId,
+      kind: "CLIENT",
+      firmOrganizationId: { not: null },
+    },
+    select: {
+      id: true,
+      name: true,
+      firmOrganizationId: true,
+    },
+  });
+  if (!client?.firmOrganizationId) return null;
+
+  const firmMembership = await prisma.membership.findUnique({
+    where: {
+      organizationId_userId: {
+        organizationId: client.firmOrganizationId,
+        userId,
+      },
+    },
+  });
+  if (!firmMembership || !hasMinOrgRole(firmMembership.role, "ADMIN")) return null;
+
+  return {
+    client,
+    firmOrganizationId: client.firmOrganizationId,
+    role: firmMembership.role,
+  };
+}
+
+export async function updateClientOrganizationAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireSession();
+  const clientId = String(formData.get("clientId") ?? "");
+  if (!clientId) return { ok: false, error: "Missing client." };
+
+  const access = await resolveFirmAdminForClient(session.user.id, clientId);
+  if (!access) {
+    return { ok: false, error: "You cannot edit this client." };
+  }
+
+  const parsed = clientOrgSchema.safeParse({
+    name: formData.get("name"),
+    province: String(formData.get("province") ?? "").trim() || undefined,
+    fiscalYearStartMonth: formData.get("fiscalYearStartMonth"),
+    fiscalYearStartDay: formData.get("fiscalYearStartDay"),
+    gstYearStartMonth: formData.get("gstYearStartMonth"),
+    gstYearStartDay: formData.get("gstYearStartDay"),
+    gstFilingFrequency: formData.get("gstFilingFrequency"),
+    pstFilingFrequency: formData.get("pstFilingFrequency"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: "Please enter a valid client name and settings." };
+  }
+
+  const provinceRaw = parsed.data.province ? normalizeProvince(parsed.data.province) : "";
+  const gstPeriods = parseGstPeriodsJson(String(formData.get("gstPeriodsJson") ?? "[]"));
+
+  await prisma.organization.update({
+    where: { id: clientId },
+    data: {
+      name: parsed.data.name,
+      defaultProvince: provinceRaw || null,
+      fiscalYearStartMonth: parsed.data.fiscalYearStartMonth,
+      fiscalYearStartDay: parsed.data.fiscalYearStartDay,
+      gstYearStartMonth: parsed.data.gstYearStartMonth,
+      gstYearStartDay: parsed.data.gstYearStartDay,
+      gstFilingFrequency: filingFrequencyFromHtml(parsed.data.gstFilingFrequency),
+      pstFilingFrequency: filingFrequencyFromHtml(parsed.data.pstFilingFrequency),
+    },
+  });
+
+  await prisma.gstPeriod.deleteMany({ where: { organizationId: clientId } });
+  if (gstPeriods.length) {
+    await prisma.gstPeriod.createMany({
+      data: gstPeriods.map((p) => ({
+        organizationId: clientId,
+        name: p.name,
+        startDate: p.startDate,
+        endDate: p.endDate,
+      })),
+    });
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: access.firmOrganizationId,
+      actorId: session.user.id,
+      action: "client.updated",
+      entityType: "Organization",
+      entityId: clientId,
+      metadata: { name: parsed.data.name, province: provinceRaw || null },
+    },
+  });
+
+  revalidatePath("/app");
+  return { ok: true, message: `Client “${parsed.data.name}” updated.` };
+}
+
+export async function deleteClientOrganizationAction(
+  _prev: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireSession();
+  const clientId = String(formData.get("clientId") ?? "");
+  if (!clientId) return { ok: false, error: "Missing client." };
+
+  const access = await resolveFirmAdminForClient(session.user.id, clientId);
+  if (!access) {
+    return { ok: false, error: "You cannot delete this client." };
+  }
+
+  const sibling = await prisma.organization.findFirst({
+    where: {
+      firmOrganizationId: access.firmOrganizationId,
+      kind: "CLIENT",
+      id: { not: clientId },
+      isActive: true,
+    },
+    orderBy: { name: "asc" },
+    select: { id: true },
+  });
+
+  const fallbackOrgId = sibling?.id ?? access.firmOrganizationId;
+
+  await prisma.userPreference.updateMany({
+    where: { activeOrganizationId: clientId },
+    data: {
+      activeOrganizationId: fallbackOrgId,
+      activeBankAccountId: null,
+    },
+  });
+
+  await prisma.organization.delete({ where: { id: clientId } });
+
+  await prisma.auditLog.create({
+    data: {
+      organizationId: access.firmOrganizationId,
+      actorId: session.user.id,
+      action: "client.deleted",
+      entityType: "Organization",
+      entityId: clientId,
+      metadata: { name: access.client.name },
+    },
+  });
+
+  revalidatePath("/app");
+  return {
+    ok: true,
+    message: `Client “${access.client.name}” deleted.`,
   };
 }
 

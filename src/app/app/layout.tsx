@@ -53,6 +53,38 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     !context.organization.firmOrganizationId &&
     hasMinOrgRole(context.role as OrgRole, "OWNER");
 
+  const editableClient =
+    canManageClients &&
+    context.organization.kind === "CLIENT" &&
+    context.organization.firmOrganizationId
+      ? await prisma.organization.findUnique({
+          where: { id: context.organization.id },
+          select: {
+            id: true,
+            name: true,
+            defaultProvince: true,
+            fiscalYearStartMonth: true,
+            fiscalYearStartDay: true,
+            gstYearStartMonth: true,
+            gstYearStartDay: true,
+            gstFilingFrequency: true,
+            pstFilingFrequency: true,
+            gstPeriods: {
+              orderBy: { startDate: "asc" },
+              select: { name: true, startDate: true, endDate: true },
+            },
+          },
+        })
+      : null;
+
+  const editableCompany = canManageMyCompanies
+    ? {
+        id: context.organization.id,
+        name: context.organization.name,
+        defaultProvince: context.organization.defaultProvince ?? null,
+      }
+    : null;
+
   return (
     <AppShell
       orgName={context.organization.name}
@@ -67,6 +99,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       activeOrganizationId={context.organization.id}
       userOrganizations={clientOrganizations}
       orgRole={context.role as OrgRole}
+      editableClient={
+        editableClient
+          ? {
+              id: editableClient.id,
+              name: editableClient.name,
+              defaultProvince: editableClient.defaultProvince,
+              fiscalYearStartMonth: editableClient.fiscalYearStartMonth,
+              fiscalYearStartDay: editableClient.fiscalYearStartDay,
+              gstYearStartMonth: editableClient.gstYearStartMonth,
+              gstYearStartDay: editableClient.gstYearStartDay,
+              gstFilingFrequency: editableClient.gstFilingFrequency,
+              pstFilingFrequency: editableClient.pstFilingFrequency,
+              gstPeriods: editableClient.gstPeriods.map((p) => ({
+                name: p.name,
+                startDate: p.startDate.toISOString().slice(0, 10),
+                endDate: p.endDate.toISOString().slice(0, 10),
+              })),
+            }
+          : null
+      }
+      editableCompany={editableCompany}
       banks={context.banks.map((b) => ({
         id: b.id,
         name: b.name,

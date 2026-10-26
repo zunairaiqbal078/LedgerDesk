@@ -3,6 +3,8 @@
 import { usePathname } from "next/navigation";
 import { ConverterSidebar } from "@/components/converter/converter-sidebar";
 import { ConverterTopbar } from "@/components/converter/converter-topbar";
+import type { EditableClient } from "@/components/edit-client-modal";
+import type { EditableCompany } from "@/components/edit-company-modal";
 import type { OrganizationKind, OrgRole } from "@prisma/client";
 
 type Bank = {
@@ -36,6 +38,8 @@ export function AppShell({
   activeOrganizationId,
   userOrganizations,
   orgRole,
+  editableClient = null,
+  editableCompany = null,
   banks,
   activeBankId,
   folders,
@@ -54,6 +58,8 @@ export function AppShell({
   activeOrganizationId: string;
   userOrganizations: UserOrganization[];
   orgRole: OrgRole;
+  editableClient?: EditableClient | null;
+  editableCompany?: EditableCompany | null;
   banks: Bank[];
   activeBankId: string | null;
   folders: Folder[];
@@ -80,6 +86,8 @@ export function AppShell({
             activeOrganizationId={activeOrganizationId}
             userOrganizations={userOrganizations}
             orgRole={orgRole}
+            editableClient={editableClient}
+            editableCompany={editableCompany}
             banks={banks}
             activeBankId={activeBankId}
             folders={folders}
