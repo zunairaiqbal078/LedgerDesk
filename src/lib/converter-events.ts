@@ -9,6 +9,10 @@ export const CONVERTER_EVENTS = {
   /** Download CSV of current transaction grid (Export). */
   exportConversion: "ledgerdesk:export-conversion",
   preferredFolderChanged: "ledgerdesk:preferred-folder-changed",
+  /** Sidebar connected-account change; workspace may prompt before switching. */
+  requestActiveBankChange: "ledgerdesk:request-active-bank-change",
+  /** Workspace cancelled a pending bank switch — reset sidebar dropdown. */
+  activeBankChangeCancelled: "ledgerdesk:active-bank-change-cancelled",
 } as const;
 
 export function dispatchConverterEvent(name: string, detail?: unknown) {

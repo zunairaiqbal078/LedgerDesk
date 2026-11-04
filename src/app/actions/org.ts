@@ -963,34 +963,55 @@ export async function bulkDeleteBanksAction(formData: FormData): Promise<ActionR
   };
 }
 
-export async function setActiveBankAction(formData: FormData) {
-  const session = await requireSession();
-  const bankId = String(formData.get("bankId") ?? "");
-  const context = await requireOrgContext("VIEWER");
-
+async function persistActiveBank(userId: string, organizationId: string, bankId: string) {
   const bank = await prisma.bankAccount.findFirst({
     where: {
       id: bankId,
-      organizationId: context.organization.id,
+      organizationId,
       isArchived: false,
     },
   });
-
-  if (!bank) {
-    redirect("/app?error=invalid-bank");
-  }
+  if (!bank) return null;
 
   await prisma.userPreference.upsert({
-    where: { userId: session.user.id },
+    where: { userId },
     create: {
-      userId: session.user.id,
-      activeOrganizationId: context.organization.id,
+      userId,
+      activeOrganizationId: organizationId,
       activeBankAccountId: bank.id,
     },
     update: {
       activeBankAccountId: bank.id,
     },
   });
+
+  revalidatePath("/app");
+  return bank;
+}
+
+/** Switch connected account without full-page redirect (transactions guard, etc.). */
+export async function setActiveBankInlineAction(bankId: string): Promise<ActionResult> {
+  const session = await requireSession();
+  const context = await requireOrgContext("VIEWER");
+  const bank = await persistActiveBank(session.user.id, context.organization.id, bankId);
+  if (!bank) return { ok: false, error: "Invalid bank account." };
+  return { ok: true, message: `Connected account: ${bank.name}` };
+}
+
+export async function setActiveBankAction(formData: FormData) {
+  const session = await requireSession();
+  const bankId = String(formData.get("bankId") ?? "");
+  const context = await requireOrgContext("VIEWER");
+
+  const bank = await persistActiveBank(session.user.id, context.organization.id, bankId);
+
+  if (!bank) {
+    redirect("/app?error=invalid-bank");
+  }
+
+  if (formData.get("inline") === "true") {
+    return { ok: true, message: `Connected account: ${bank.name}` };
+  }
 
   redirect("/app");
 }

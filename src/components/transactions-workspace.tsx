@@ -65,7 +65,8 @@ import {
 import type { TaxCodeInfo } from "@/lib/tax-reports";
 import { parseBankXml } from "@/lib/xml-parser";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
-import { CONVERTER_EVENTS } from "@/lib/converter-events";
+import { CONVERTER_EVENTS, dispatchConverterEvent } from "@/lib/converter-events";
+import { setActiveBankInlineAction } from "@/app/actions/org";
 
 type TxRow = {
   id: string;
@@ -266,8 +267,11 @@ export function TransactionsWorkspace({
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [importGuardOpen, setImportGuardOpen] = useState(false);
-  const [importGuardMode, setImportGuardMode] = useState<"import" | "new">("import");
+  const [importGuardMode, setImportGuardMode] = useState<"import" | "new" | "switchBank">(
+    "import",
+  );
   const pendingImportFilesRef = useRef<File[] | null>(null);
+  const pendingBankSwitchRef = useRef<string | null>(null);
   const replaceBeforeNextImportRef = useRef(false);
   const [taxPickerTxId, setTaxPickerTxId] = useState<string | null>(null);
   const [taxPickerMode, setTaxPickerMode] = useState<"gst" | "pst">("gst");
@@ -506,6 +510,17 @@ export function TransactionsWorkspace({
       bankHint: json.bankHint ?? null,
     };
   }
+
+  const applyActiveBankSwitch = useCallback(async (bankId: string) => {
+    const result = await setActiveBankInlineAction(bankId);
+    if (result.ok) {
+      toast.success(result.message ?? "Connected account updated");
+      router.refresh();
+    } else {
+      toast.error(result.error ?? "Could not switch account");
+      dispatchConverterEvent(CONVERTER_EVENTS.activeBankChangeCancelled);
+    }
+  }, [router]);
 
   async function clearTransactionsForNew() {
     const result = await deleteAllTransactionsAction();
@@ -926,20 +941,44 @@ export function TransactionsWorkspace({
         toast.success(`Date format set to ${fmt}`);
       }
     };
+    const onRequestBankChange = (e: Event) => {
+      const bankId = (e as CustomEvent<{ bankId?: string }>).detail?.bankId;
+      if (!bankId || bankId === activeBankId) return;
+      if (rows.length > 0) {
+        pendingBankSwitchRef.current = bankId;
+        setImportGuardMode("switchBank");
+        setImportGuardOpen(true);
+        return;
+      }
+      void applyActiveBankSwitch(bankId);
+    };
 
     window.addEventListener(CONVERTER_EVENTS.importStatement, onImport);
     window.addEventListener(CONVERTER_EVENTS.openSaveConversion, onSave);
     window.addEventListener(CONVERTER_EVENTS.newConversion, onNew);
     window.addEventListener(CONVERTER_EVENTS.addBlankRow, onAddRow);
     window.addEventListener(CONVERTER_EVENTS.applyDateFormat, onDateFormat);
+    window.addEventListener(CONVERTER_EVENTS.requestActiveBankChange, onRequestBankChange);
     return () => {
       window.removeEventListener(CONVERTER_EVENTS.importStatement, onImport);
       window.removeEventListener(CONVERTER_EVENTS.openSaveConversion, onSave);
       window.removeEventListener(CONVERTER_EVENTS.newConversion, onNew);
       window.removeEventListener(CONVERTER_EVENTS.addBlankRow, onAddRow);
       window.removeEventListener(CONVERTER_EVENTS.applyDateFormat, onDateFormat);
+      window.removeEventListener(CONVERTER_EVENTS.requestActiveBankChange, onRequestBankChange);
     };
-  }, [canEdit, rows.length, router, bankName]);
+  }, [activeBankId, applyActiveBankSwitch, canEdit, rows.length, router, bankName]);
+
+  useEffect(() => {
+    const onSaved = () => {
+      const bankId = pendingBankSwitchRef.current;
+      if (!bankId) return;
+      pendingBankSwitchRef.current = null;
+      void applyActiveBankSwitch(bankId);
+    };
+    window.addEventListener("ledgerdesk:last-saved-conversion", onSaved);
+    return () => window.removeEventListener("ledgerdesk:last-saved-conversion", onSaved);
+  }, [applyActiveBankSwitch]);
 
   function buildBankPayload() {
     if (importBankMode === "new") {
@@ -1568,23 +1607,50 @@ export function TransactionsWorkspace({
       <ImportGuardModal
         open={importGuardOpen}
         transactionCount={rows.length}
+        description={
+          importGuardMode === "switchBank"
+            ? `This connected account has ${rows.length} transaction${rows.length === 1 ? "" : "s"} in the table. Save your work first, or switch to another account without saving. Other accounts keep their own transactions.`
+            : undefined
+        }
         title={
-          importGuardMode === "new" ? "Start new conversion?" : "Import new statement?"
+          importGuardMode === "new"
+            ? "Start new conversion?"
+            : importGuardMode === "switchBank"
+              ? "Switch connected account?"
+              : "Import new statement?"
         }
         discardLabel={
-          importGuardMode === "new" ? "Clear transactions" : "Clear & import new"
+          importGuardMode === "new"
+            ? "Clear transactions"
+            : importGuardMode === "switchBank"
+              ? "Switch without saving"
+              : "Clear & import new"
         }
         onCancel={() => {
           setImportGuardOpen(false);
           pendingImportFilesRef.current = null;
+          if (importGuardMode === "switchBank") {
+            pendingBankSwitchRef.current = null;
+            dispatchConverterEvent(CONVERTER_EVENTS.activeBankChangeCancelled);
+          }
         }}
         onSaveFirst={() => {
           setImportGuardOpen(false);
           setSaveOpen(true);
-          toast.message("After saving, choose your statement file(s) again to import.");
+          if (importGuardMode === "switchBank") {
+            toast.message("After saving, we'll switch to the selected account.");
+          } else {
+            toast.message("After saving, choose your statement file(s) again to import.");
+          }
         }}
         onDiscardAndContinue={() => {
           setImportGuardOpen(false);
+          if (importGuardMode === "switchBank") {
+            const bankId = pendingBankSwitchRef.current;
+            pendingBankSwitchRef.current = null;
+            if (bankId) void applyActiveBankSwitch(bankId);
+            return;
+          }
           const files = pendingImportFilesRef.current;
           pendingImportFilesRef.current = null;
           void (async () => {

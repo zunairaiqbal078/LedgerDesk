@@ -10,10 +10,12 @@ export function ImportGuardModal({
   onSaveFirst,
   onDiscardAndContinue,
   discardLabel = "Clear & import new",
+  description,
 }: {
   open: boolean;
   transactionCount: number;
   title?: string;
+  description?: string;
   onCancel: () => void;
   onSaveFirst: () => void;
   onDiscardAndContinue: () => void;
@@ -26,10 +28,14 @@ export function ImportGuardModal({
       <Card className="w-full max-w-lg p-6">
         <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">{title}</h2>
         <p className="mt-2 text-sm text-slate-600">
-          This client&apos;s transaction table currently has{" "}
-          <strong>{transactionCount}</strong> row
-          {transactionCount === 1 ? "" : "s"}. Would you like to save your work before
-          continuing?
+          {description ?? (
+            <>
+              This client&apos;s transaction table currently has{" "}
+              <strong>{transactionCount}</strong> row
+              {transactionCount === 1 ? "" : "s"}. Would you like to save your work before
+              continuing?
+            </>
+          )}
         </p>
         <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
           <Button type="button" variant="secondary" onClick={onCancel}>

@@ -18,7 +18,7 @@ import {
   deleteBankAction,
   deleteClientOrganizationAction,
   deleteMyBusinessCompanyAction,
-  setActiveBankAction,
+  setActiveBankInlineAction,
   switchActiveOrganizationAction,
   type ActionResult,
 } from "@/app/actions/org";
@@ -367,6 +367,64 @@ export function ConverterSidebar({
     setSelectedBankId(activeBankId ?? "");
   }, [activeBankId]);
 
+  useEffect(() => {
+    const bank = banks.find((b) => b.id === activeBankId);
+    if (!bank) return;
+    const st = bank.type === "CREDIT_CARD" ? "Credit Card" : "Bank";
+    setStatementType(st);
+    localStorage.setItem("ledgerdesk-statement-type", st);
+  }, [activeBankId, banks]);
+
+  useEffect(() => {
+    const onCancel = () => setSelectedBankId(activeBankId ?? "");
+    window.addEventListener(CONVERTER_EVENTS.activeBankChangeCancelled, onCancel);
+    return () =>
+      window.removeEventListener(CONVERTER_EVENTS.activeBankChangeCancelled, onCancel);
+  }, [activeBankId]);
+
+  const [bankSwitchPending, startBankSwitch] = useTransition();
+
+  const handleConnectedBankChange = useCallback(
+    (bankId: string) => {
+      if (bankId === (activeBankId ?? "")) return;
+
+      const bank = banks.find((b) => b.id === bankId);
+      if (bank) {
+        persistStatementType(bank.type === "CREDIT_CARD" ? "Credit Card" : "Bank");
+      }
+
+      if (!bankId) {
+        setSelectedBankId("");
+        return;
+      }
+
+      setSelectedBankId(bankId);
+
+      const tab =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("tab")
+          : null;
+      const onTransactions = isTransactionsImportSurface(pathname, tab);
+
+      if (onTransactions) {
+        dispatchConverterEvent(CONVERTER_EVENTS.requestActiveBankChange, { bankId });
+        return;
+      }
+
+      startBankSwitch(async () => {
+        const result = await setActiveBankInlineAction(bankId);
+        if (result.ok) {
+          toast.success(result.message ?? "Account connected");
+          router.refresh();
+        } else {
+          toast.error(result.error ?? "Could not switch account");
+          setSelectedBankId(activeBankId ?? "");
+        }
+      });
+    },
+    [activeBankId, banks, pathname, router],
+  );
+
   const selectedBank = selectedBankId
     ? banks.find((b) => b.id === selectedBankId) ?? null
     : null;
@@ -455,25 +513,20 @@ export function ConverterSidebar({
               <strong>only</strong> the selected account; others stay.
             </p>
           ) : null}
-          <form action={setActiveBankAction}>
-            <select
-              name="bankId"
-              value={selectedBankId}
-              className="h-9 w-full rounded-lg border border-[#d6e1e9] bg-white px-2 text-sm"
-              onChange={(e) => {
-                const id = e.target.value;
-                setSelectedBankId(id);
-                if (id) e.currentTarget.form?.requestSubmit();
-              }}
-            >
-              <option value="">— No connected account —</option>
-              {connectedBankOptions.map((bank) => (
-                <option key={bank.id} value={bank.id}>
-                  {bankOptionLabel(bank)}
-                </option>
-              ))}
-            </select>
-          </form>
+          <select
+            name="bankId"
+            value={selectedBankId}
+            disabled={bankSwitchPending}
+            className="h-9 w-full rounded-lg border border-[#d6e1e9] bg-white px-2 text-sm"
+            onChange={(e) => handleConnectedBankChange(e.target.value)}
+          >
+            <option value="">— No connected account —</option>
+            {connectedBankOptions.map((bank) => (
+              <option key={bank.id} value={bank.id}>
+                {bankOptionLabel(bank)}
+              </option>
+            ))}
+          </select>
           {canDeleteBanks && selectedBank ? (
             <button
               type="button"
