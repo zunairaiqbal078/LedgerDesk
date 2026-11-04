@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 /** Manual GST/PST amounts on a transaction row (schema: Transaction.sales/provinceTaxAmountOverride). */
 export type TaxAmountOverrideUpdate = {
@@ -6,11 +6,19 @@ export type TaxAmountOverrideUpdate = {
   provinceTaxAmountOverride?: number | null;
 };
 
+export function transactionHasTaxAmountOverrideFields(): boolean {
+  const model = Prisma.dmmf.datamodel.models.find((m) => m.name === "Transaction");
+  return model?.fields.some((f) => f.name === "salesTaxAmountOverride") ?? false;
+}
+
 export function taxAmountOverrideUpdate(
   clear: boolean,
   sales: number | null | undefined,
   pst: number | null | undefined,
 ): TaxAmountOverrideUpdate {
+  if (!transactionHasTaxAmountOverrideFields()) {
+    return {};
+  }
   if (clear) {
     return { salesTaxAmountOverride: null, provinceTaxAmountOverride: null };
   }
@@ -40,8 +48,7 @@ export type TransactionRowPatch = {
   bankType: "BANK" | "CREDIT_CARD";
 };
 
-/** Fields returned after inline transaction row saves (keep in sync with Prisma schema). */
-export const transactionPatchSelect = {
+const transactionPatchSelectBase = {
   id: true,
   bankAccountId: true,
   date: true,
@@ -54,15 +61,36 @@ export const transactionPatchSelect = {
   taxCodes: true,
   provinceTaxCodes: true,
   taxMode: true,
-  salesTaxAmountOverride: true,
-  provinceTaxAmountOverride: true,
   notes: true,
   bankAccount: { select: { name: true, type: true } },
-} satisfies Prisma.TransactionSelect;
+} as const;
 
-export type TransactionPatchRow = Prisma.TransactionGetPayload<{
-  select: typeof transactionPatchSelect;
-}>;
+/** Built from runtime DMMF so a stale generated client cannot break findMany select. */
+export const transactionPatchSelect = {
+  ...transactionPatchSelectBase,
+  ...(transactionHasTaxAmountOverrideFields()
+    ? { salesTaxAmountOverride: true, provinceTaxAmountOverride: true }
+    : {}),
+} as Prisma.TransactionSelect;
+
+export type TransactionPatchRow = {
+  id: string;
+  bankAccountId: string;
+  date: Date;
+  description: string;
+  moneyIn: Prisma.Decimal;
+  moneyOut: Prisma.Decimal;
+  accountNumber: string | null;
+  accountName: string | null;
+  province: string | null;
+  taxCodes: string[];
+  provinceTaxCodes: string[];
+  taxMode: string;
+  salesTaxAmountOverride?: Prisma.Decimal | null;
+  provinceTaxAmountOverride?: Prisma.Decimal | null;
+  notes: string | null;
+  bankAccount: { name: string; type: "BANK" | "CREDIT_CARD" };
+};
 
 export function toTransactionRowPatch(row: TransactionPatchRow): TransactionRowPatch {
   return {
