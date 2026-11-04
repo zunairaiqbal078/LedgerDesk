@@ -50,13 +50,19 @@ export function calculateTransactionAmounts(
       taxAmount = round2(salesTaxAmount + provinceTaxAmount);
       netAmount = round2(gross);
     } else {
-      // Inclusive: extract each component proportionally from embedded tax
-      taxAmount = taxAmountForRate(gross, combinedRate, mode);
-      if (combinedRate > 0) {
-        salesTaxAmount = round2(taxAmount * (salesRate / combinedRate));
-        provinceTaxAmount = round2(taxAmount - salesTaxAmount);
-      }
-      netAmount = round2(gross - taxAmount);
+      // Inclusive: GST/HST and PST components (matches tax-reports taxAmountFor split)
+      const totalTax =
+        combinedRate > 0 ? taxAmountForRate(gross, combinedRate, mode) : 0;
+      salesTaxAmount =
+        combinedRate > 0
+          ? round2((gross * (salesRate / 100)) / (1 + combinedRate / 100))
+          : 0;
+      provinceTaxAmount =
+        combinedRate > 0
+          ? round2((gross * (provinceRate / 100)) / (1 + combinedRate / 100))
+          : 0;
+      taxAmount = round2(salesTaxAmount + provinceTaxAmount);
+      netAmount = round2(gross - totalTax);
     }
   }
 

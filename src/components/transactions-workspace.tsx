@@ -333,7 +333,8 @@ export function TransactionsWorkspace({
             return (a.accountNumber ?? "").localeCompare(b.accountNumber ?? "") * dir;
           case "account":
             return (a.accountName ?? "").localeCompare(b.accountName ?? "") * dir;
-          case "tax":
+          case "salesTax":
+          case "pstTax":
           case "net": {
             const calcA = calculateTransactionAmounts(
               {
@@ -355,9 +356,12 @@ export function TransactionsWorkspace({
               },
               taxCatalog,
             );
-            const va = sortBy === "tax" ? calcA.taxAmount : calcA.netAmount;
-            const vb = sortBy === "tax" ? calcB.taxAmount : calcB.netAmount;
-            return (va - vb) * dir;
+            const pick = (calc: ReturnType<typeof calculateTransactionAmounts>) => {
+              if (sortBy === "salesTax") return calc.salesTaxAmount;
+              if (sortBy === "pstTax") return calc.provinceTaxAmount;
+              return calc.netAmount;
+            };
+            return (pick(calcA) - pick(calcB)) * dir;
           }
           case "statementType":
             return statementTypeLabel(a).localeCompare(statementTypeLabel(b)) * dir;
@@ -1083,7 +1087,8 @@ export function TransactionsWorkspace({
     ["Transactions", String(summary.count), ""],
     ["Money In", `$${summary.moneyIn.toFixed(2)}`, "money-in"],
     ["Money Out", `$${summary.moneyOut.toFixed(2)}`, "money-out"],
-    ["Tax Amount", `$${summary.taxAmount.toFixed(2)}`, ""],
+    ["Sales Tax Amount", `$${summary.salesTaxAmount.toFixed(2)}`, ""],
+    ["PST Amount", `$${summary.provinceTaxAmount.toFixed(2)}`, ""],
     ["Net Amount", `$${summary.netAmount.toFixed(2)}`, ""],
   ] as const;
 
@@ -1370,7 +1375,8 @@ export function TransactionsWorkspace({
               <option value="moneyOut">Money Out</option>
               <option value="accountNumber">Account Number</option>
               <option value="account">Account / Category</option>
-              <option value="tax">Tax Amount</option>
+              <option value="salesTax">Sales Tax Amount</option>
+              <option value="pstTax">PST Amount</option>
               <option value="net">Net Amount</option>
               <option value="statementType">Bank / Credit Card</option>
               <option value="postingAccount">Posting Account</option>
@@ -1475,7 +1481,22 @@ export function TransactionsWorkspace({
         {summaryCards.map(([label, value, tone]) => (
           <div key={label} className="card">
             <div className="k">{label}</div>
-            <div className={`v ${tone}`} id={label === "Transactions" ? "sumRows" : label === "Money In" ? "sumIn" : label === "Money Out" ? "sumOut" : label === "Tax Amount" ? "sumTax" : "sumNet"}>
+            <div
+              className={`v ${tone}`}
+              id={
+                label === "Transactions"
+                  ? "sumRows"
+                  : label === "Money In"
+                    ? "sumIn"
+                    : label === "Money Out"
+                      ? "sumOut"
+                      : label === "Sales Tax Amount"
+                        ? "sumSalesTax"
+                        : label === "PST Amount"
+                          ? "sumPst"
+                          : "sumNet"
+              }
+            >
               {value}
             </div>
           </div>
@@ -1510,7 +1531,8 @@ export function TransactionsWorkspace({
               <th className="col-tax">Sales Tax Code</th>
               <th className="col-tax">PST Code</th>
               <th className="col-taxmode">Tax Treatment</th>
-              <th className="num col-amt">Tax Amount</th>
+              <th className="num col-amt">Sales Tax Amount</th>
+              <th className="num col-amt">PST Amount</th>
               <th
                 className="num col-amt"
                 title="Transaction amount excluding the selected sales tax"

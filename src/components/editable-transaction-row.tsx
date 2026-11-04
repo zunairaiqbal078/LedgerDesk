@@ -494,8 +494,11 @@ function EditableTransactionRowInner({
           "Inclusive"
         )}
       </td>
-      <td className="num col-amt" data-taxamt={tx.id}>
-        ${calc.taxAmount.toFixed(2)}
+      <td className="num col-amt" data-salestaxamt={tx.id}>
+        ${calc.salesTaxAmount.toFixed(2)}
+      </td>
+      <td className="num col-amt" data-pstamt={tx.id}>
+        ${calc.provinceTaxAmount.toFixed(2)}
       </td>
       <td className="num col-amt" data-netamt={tx.id}>
         ${calc.netAmount.toFixed(2)}
