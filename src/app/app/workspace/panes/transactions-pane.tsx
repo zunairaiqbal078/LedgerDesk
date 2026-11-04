@@ -2,6 +2,7 @@ import { TransactionsWorkspace } from "@/components/transactions-workspace";
 import { prisma } from "@/lib/db";
 import { canEditTransactions } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
+import { transactionPatchSelect } from "@/lib/transaction-row-patch";
 
 export default async function TransactionsPane({
   loadedConversionId,
@@ -27,24 +28,7 @@ export default async function TransactionsPane({
         ...(activeBank ? { bankAccountId: activeBank.id } : {}),
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        bankAccountId: true,
-        date: true,
-        description: true,
-        moneyIn: true,
-        moneyOut: true,
-        accountNumber: true,
-        accountName: true,
-        province: true,
-        taxCodes: true,
-        provinceTaxCodes: true,
-        taxMode: true,
-        salesTaxAmountOverride: true,
-        provinceTaxAmountOverride: true,
-        notes: true,
-        bankAccount: { select: { name: true, type: true } },
-      },
+      select: transactionPatchSelect,
     }),
     prisma.chartAccount.findMany({
       where: { organizationId: organization.id },
