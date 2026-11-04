@@ -10,6 +10,14 @@ import { findAccountantFirmMembershipForUser } from "@/lib/org-meta";
 import { hasMinOrgRole, isSuperAdmin } from "@/lib/permissions";
 import { resolveOrganizationAccess } from "@/lib/org-access";
 
+/** Next.js throws this while probing static generation; rethrow so the route stays dynamic. */
+function isDynamicServerUsage(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "digest" in error) {
+    return (error as { digest?: string }).digest === "DYNAMIC_SERVER_USAGE";
+  }
+  return error instanceof Error && error.message.includes("Dynamic server usage");
+}
+
 /** Deduplicate session reads within a single RSC request (layout + panes). */
 export const getSession = cache(async function getSession() {
   try {
@@ -17,6 +25,9 @@ export const getSession = cache(async function getSession() {
       headers: await headers(),
     });
   } catch (error) {
+    if (isDynamicServerUsage(error)) {
+      throw error;
+    }
     if (isPrismaConnectionError(error)) {
       redirect("/db-unavailable");
     }

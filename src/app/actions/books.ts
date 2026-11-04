@@ -1330,6 +1330,8 @@ export async function bulkCategorizeAction(
     provinceTaxCodes?: string[];
     taxMode?: "INCLUSIVE" | "EXCLUSIVE";
     province?: string | null;
+    salesTaxAmountOverride?: null;
+    provinceTaxAmountOverride?: null;
   } = {};
 
   if (applyPosting) {
@@ -1383,6 +1385,11 @@ export async function bulkCategorizeAction(
       taxModeRaw === "EXCLUSIVE" || taxModeRaw === "INCLUSIVE" ? taxModeRaw : "INCLUSIVE";
   }
 
+  if (applySalesTax || applyPstTax || applyTaxMode) {
+    data.salesTaxAmountOverride = null;
+    data.provinceTaxAmountOverride = null;
+  }
+
   const result = await prisma.transaction.updateMany({
     where: {
       id: { in: ids },
@@ -1428,6 +1435,8 @@ export async function duplicateTransactionsAction(formData: FormData): Promise<A
         taxCodes: [...s.taxCodes],
         provinceTaxCodes: [...s.provinceTaxCodes],
         taxMode: s.taxMode,
+        salesTaxAmountOverride: s.salesTaxAmountOverride,
+        provinceTaxAmountOverride: s.provinceTaxAmountOverride,
         notes: s.notes,
         externalTransactionId: null,
         reconciledIn: false,
@@ -1504,6 +1513,8 @@ export async function swapDebitCreditAction(formData: FormData): Promise<ActionR
         data: {
           moneyIn: tx.moneyOut,
           moneyOut: tx.moneyIn,
+          salesTaxAmountOverride: null,
+          provinceTaxAmountOverride: null,
         },
       }),
     ),
@@ -1556,6 +1567,8 @@ export async function updateTransactionAction(formData: FormData): Promise<Actio
         String(formData.get("taxMode") ?? existing.taxMode) === "EXCLUSIVE"
           ? "EXCLUSIVE"
           : "INCLUSIVE",
+      salesTaxAmountOverride: null,
+      provinceTaxAmountOverride: null,
     },
   });
   revalidatePath("/app");

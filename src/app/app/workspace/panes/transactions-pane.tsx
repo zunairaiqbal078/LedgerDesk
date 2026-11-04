@@ -40,6 +40,8 @@ export default async function TransactionsPane({
         taxCodes: true,
         provinceTaxCodes: true,
         taxMode: true,
+        salesTaxAmountOverride: true,
+        provinceTaxAmountOverride: true,
         notes: true,
         bankAccount: { select: { name: true, type: true } },
       },
@@ -112,6 +114,10 @@ export default async function TransactionsPane({
         taxCodes: tx.taxCodes,
         provinceTaxCodes: tx.provinceTaxCodes,
         taxMode: tx.taxMode,
+        salesTaxAmountOverride:
+          tx.salesTaxAmountOverride != null ? Number(tx.salesTaxAmountOverride) : null,
+        provinceTaxAmountOverride:
+          tx.provinceTaxAmountOverride != null ? Number(tx.provinceTaxAmountOverride) : null,
         notes: tx.notes,
         bankName: tx.bankAccount.name,
         bankType: tx.bankAccount.type,

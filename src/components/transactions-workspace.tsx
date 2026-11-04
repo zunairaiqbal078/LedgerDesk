@@ -60,6 +60,7 @@ import { isOfxOrQboFileName, parseOfxOrQbo } from "@/lib/ofx-parser";
 import {
   calculateTransactionAmounts,
   summarizeTransactions,
+  transactionToCalcInput,
 } from "@/lib/transaction-math";
 import type { TaxCodeInfo } from "@/lib/tax-reports";
 import { parseBankXml } from "@/lib/xml-parser";
@@ -79,6 +80,8 @@ type TxRow = {
   taxCodes: string[];
   provinceTaxCodes: string[];
   taxMode: string;
+  salesTaxAmountOverride?: number | null;
+  provinceTaxAmountOverride?: number | null;
   notes: string | null;
   bankName?: string;
   bankType?: "BANK" | "CREDIT_CARD";
@@ -336,26 +339,8 @@ export function TransactionsWorkspace({
           case "salesTax":
           case "pstTax":
           case "net": {
-            const calcA = calculateTransactionAmounts(
-              {
-                moneyIn: a.moneyIn,
-                moneyOut: a.moneyOut,
-                taxCodes: a.taxCodes,
-                provinceTaxCodes: a.provinceTaxCodes,
-                taxMode: a.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE",
-              },
-              taxCatalog,
-            );
-            const calcB = calculateTransactionAmounts(
-              {
-                moneyIn: b.moneyIn,
-                moneyOut: b.moneyOut,
-                taxCodes: b.taxCodes,
-                provinceTaxCodes: b.provinceTaxCodes,
-                taxMode: b.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE",
-              },
-              taxCatalog,
-            );
+            const calcA = calculateTransactionAmounts(transactionToCalcInput(a), taxCatalog);
+            const calcB = calculateTransactionAmounts(transactionToCalcInput(b), taxCatalog);
             const pick = (calc: ReturnType<typeof calculateTransactionAmounts>) => {
               if (sortBy === "salesTax") return calc.salesTaxAmount;
               if (sortBy === "pstTax") return calc.provinceTaxAmount;
@@ -380,16 +365,7 @@ export function TransactionsWorkspace({
   const summary = useMemo(
     () =>
       summarizeTransactions(
-        filtered.map((tx) => ({
-          moneyIn: tx.moneyIn,
-          moneyOut: tx.moneyOut,
-          taxCodes: tx.taxCodes,
-          provinceTaxCodes: tx.provinceTaxCodes,
-          taxMode:
-            tx.taxMode === "EXCLUSIVE"
-              ? "EXCLUSIVE"
-              : ("INCLUSIVE" as const),
-        })),
+        filtered.map((tx) => transactionToCalcInput(tx)),
         taxCatalog,
       ),
     [filtered, taxCatalog],

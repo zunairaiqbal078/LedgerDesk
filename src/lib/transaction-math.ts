@@ -6,6 +6,8 @@ export type TxCalcInput = {
   taxCodes: string[];
   provinceTaxCodes?: string[];
   taxMode: "INCLUSIVE" | "EXCLUSIVE" | "KEEP";
+  salesTaxAmountOverride?: number | null;
+  provinceTaxAmountOverride?: number | null;
 };
 
 export function resolveTaxRate(
@@ -66,12 +68,22 @@ export function calculateTransactionAmounts(
     }
   }
 
+  const salesOverride = input.salesTaxAmountOverride;
+  const provinceOverride = input.provinceTaxAmountOverride;
+  const hasOverride = salesOverride != null || provinceOverride != null;
+  const effectiveSales =
+    salesOverride != null ? round2(Math.max(0, salesOverride)) : salesTaxAmount;
+  const effectiveProvince =
+    provinceOverride != null ? round2(Math.max(0, provinceOverride)) : provinceTaxAmount;
+  const effectiveTax = round2(effectiveSales + effectiveProvince);
+  const effectiveNet = hasOverride ? round2(gross - effectiveTax) : netAmount;
+
   return {
     gross: round2(gross),
-    salesTaxAmount,
-    provinceTaxAmount,
-    taxAmount,
-    netAmount,
+    salesTaxAmount: effectiveSales,
+    provinceTaxAmount: effectiveProvince,
+    taxAmount: effectiveTax,
+    netAmount: effectiveNet,
     salesRate,
     provinceRate,
     rate: combinedRate,
@@ -79,6 +91,9 @@ export function calculateTransactionAmounts(
     moneyIn: round2(input.moneyIn),
     moneyOut: round2(input.moneyOut),
     side,
+    salesTaxCalculated: salesTaxAmount,
+    provinceTaxCalculated: provinceTaxAmount,
+    usingTaxOverrides: hasOverride,
   };
 }
 
@@ -116,4 +131,24 @@ export function summarizeTransactions(
 
 function round2(n: number) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+export function transactionToCalcInput(row: {
+  moneyIn: number;
+  moneyOut: number;
+  taxCodes: string[];
+  provinceTaxCodes: string[];
+  taxMode: string;
+  salesTaxAmountOverride?: number | null;
+  provinceTaxAmountOverride?: number | null;
+}): TxCalcInput {
+  return {
+    moneyIn: row.moneyIn,
+    moneyOut: row.moneyOut,
+    taxCodes: row.taxCodes,
+    provinceTaxCodes: row.provinceTaxCodes,
+    taxMode: row.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE",
+    salesTaxAmountOverride: row.salesTaxAmountOverride ?? null,
+    provinceTaxAmountOverride: row.provinceTaxAmountOverride ?? null,
+  };
 }

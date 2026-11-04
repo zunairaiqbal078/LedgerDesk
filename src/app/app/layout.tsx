@@ -10,6 +10,8 @@ import { prisma } from "@/lib/db";
 
 /** Large scanned-PDF imports via Server Actions need headroom on Vercel. */
 export const maxDuration = 60;
+/** Auth uses request headers/cookies — skip static prerender at build time. */
+export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();

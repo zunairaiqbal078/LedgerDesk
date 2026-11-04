@@ -4,6 +4,8 @@ import { Badge, Button, Card } from "@/components/ui";
 import { prisma } from "@/lib/db";
 import { requireSuperAdmin } from "@/lib/session";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminPage() {
   await requireSuperAdmin();
 

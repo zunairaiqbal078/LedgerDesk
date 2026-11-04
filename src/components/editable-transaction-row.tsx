@@ -25,10 +25,27 @@ type TxRow = {
   taxCodes: string[];
   provinceTaxCodes: string[];
   taxMode: string;
+  salesTaxAmountOverride?: number | null;
+  provinceTaxAmountOverride?: number | null;
   notes: string | null;
   bankName?: string;
   bankType?: "BANK" | "CREDIT_CARD";
 };
+
+function parseTaxField(raw: string): number | null {
+  const t = raw.trim();
+  if (!t) return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function resolveTaxOverride(input: string, autoAmount: number): number | null {
+  const n = parseTaxField(input);
+  if (n == null) return null;
+  if (Math.abs(n - autoAmount) < 0.005) return null;
+  return n;
+}
 
 type PersistOverrides = {
   bankAccountId?: string;
@@ -43,6 +60,8 @@ type PersistOverrides = {
   provinceTaxCodes?: string[];
   taxMode?: "INCLUSIVE" | "EXCLUSIVE";
   notes?: string;
+  salesTaxAmountOverride?: number | null;
+  provinceTaxAmountOverride?: number | null;
 };
 
 function EditableTransactionRowInner({
@@ -90,8 +109,43 @@ function EditableTransactionRowInner({
   const [localTaxCodes, setLocalTaxCodes] = useState(tx.taxCodes);
   const [localProvinceTaxCodes, setLocalProvinceTaxCodes] = useState(tx.provinceTaxCodes);
   const [taxMode, setTaxMode] = useState(tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE");
+  const [salesTaxAmount, setSalesTaxAmount] = useState("");
+  const [provinceTaxAmount, setProvinceTaxAmount] = useState("");
   const [notes, setNotes] = useState(tx.notes ?? "");
   const savingRef = useRef(false);
+
+  const calcBase = useMemo(
+    () => ({
+      moneyIn: Number(moneyIn) || 0,
+      moneyOut: Number(moneyOut) || 0,
+      taxCodes: localTaxCodes,
+      provinceTaxCodes: localProvinceTaxCodes,
+      taxMode: taxMode as "INCLUSIVE" | "EXCLUSIVE",
+    }),
+    [moneyIn, moneyOut, localTaxCodes, localProvinceTaxCodes, taxMode],
+  );
+
+  const calcAuto = useMemo(
+    () =>
+      calculateTransactionAmounts(
+        { ...calcBase, salesTaxAmountOverride: null, provinceTaxAmountOverride: null },
+        taxCatalog,
+      ),
+    [calcBase, taxCatalog],
+  );
+
+  const calc = useMemo(
+    () =>
+      calculateTransactionAmounts(
+        {
+          ...calcBase,
+          salesTaxAmountOverride: parseTaxField(salesTaxAmount),
+          provinceTaxAmountOverride: parseTaxField(provinceTaxAmount),
+        },
+        taxCatalog,
+      ),
+    [calcBase, salesTaxAmount, provinceTaxAmount, taxCatalog],
+  );
 
   useEffect(() => {
     setStatementType(tx.bankType === "CREDIT_CARD" ? "Credit Card" : "Bank");
@@ -117,7 +171,28 @@ function EditableTransactionRowInner({
     tx.accountName,
     tx.province,
     tx.taxMode,
+    tx.salesTaxAmountOverride,
+    tx.provinceTaxAmountOverride,
     tx.notes,
+  ]);
+
+  useEffect(() => {
+    setSalesTaxAmount(
+      tx.salesTaxAmountOverride != null
+        ? tx.salesTaxAmountOverride.toFixed(2)
+        : calcAuto.salesTaxCalculated.toFixed(2),
+    );
+    setProvinceTaxAmount(
+      tx.provinceTaxAmountOverride != null
+        ? tx.provinceTaxAmountOverride.toFixed(2)
+        : calcAuto.provinceTaxCalculated.toFixed(2),
+    );
+  }, [
+    tx.id,
+    tx.salesTaxAmountOverride,
+    tx.provinceTaxAmountOverride,
+    calcAuto.salesTaxCalculated,
+    calcAuto.provinceTaxCalculated,
   ]);
 
   const taxCodesKey = tx.taxCodes.join("|");
@@ -141,21 +216,6 @@ function EditableTransactionRowInner({
     [banks, statementType],
   );
 
-  const calc = useMemo(
-    () =>
-      calculateTransactionAmounts(
-        {
-          moneyIn: Number(moneyIn) || 0,
-          moneyOut: Number(moneyOut) || 0,
-          taxCodes: localTaxCodes,
-          provinceTaxCodes: localProvinceTaxCodes,
-          taxMode: taxMode as "INCLUSIVE" | "EXCLUSIVE",
-        },
-        taxCatalog,
-      ),
-    [moneyIn, moneyOut, localTaxCodes, localProvinceTaxCodes, taxMode, taxCatalog],
-  );
-
   const gstLabel = localTaxCodes.filter(Boolean).join(" + ") || "Select Sales Tax Code";
   const pstLabel = localProvinceTaxCodes.filter(Boolean).join(" + ") || "Select PST Code";
 
@@ -175,6 +235,24 @@ function EditableTransactionRowInner({
       const nextMode = overrides.taxMode ?? taxMode;
       const nextNotes = overrides.notes ?? notes;
 
+      const taxBasisChanged =
+        (Number(nextIn) || 0) !== tx.moneyIn ||
+        (Number(nextOut) || 0) !== tx.moneyOut ||
+        nextMode !== (tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE") ||
+        nextSales.join("|") !== tx.taxCodes.join("|") ||
+        nextPst.join("|") !== tx.provinceTaxCodes.join("|");
+
+      const nextSalesTaxOverride = taxBasisChanged
+        ? null
+        : overrides.salesTaxAmountOverride !== undefined
+          ? overrides.salesTaxAmountOverride
+          : resolveTaxOverride(salesTaxAmount, calcAuto.salesTaxCalculated);
+      const nextPstOverride = taxBasisChanged
+        ? null
+        : overrides.provinceTaxAmountOverride !== undefined
+          ? overrides.provinceTaxAmountOverride
+          : resolveTaxOverride(provinceTaxAmount, calcAuto.provinceTaxCalculated);
+
       const unchanged =
         nextBank === tx.bankAccountId &&
         nextDate === tx.date &&
@@ -187,7 +265,9 @@ function EditableTransactionRowInner({
         nextMode === (tx.taxMode === "EXCLUSIVE" ? "EXCLUSIVE" : "INCLUSIVE") &&
         (nextNotes || "") === (tx.notes ?? "") &&
         nextSales.join("|") === tx.taxCodes.join("|") &&
-        nextPst.join("|") === tx.provinceTaxCodes.join("|");
+        nextPst.join("|") === tx.provinceTaxCodes.join("|") &&
+        (nextSalesTaxOverride ?? null) === (tx.salesTaxAmountOverride ?? null) &&
+        (nextPstOverride ?? null) === (tx.provinceTaxAmountOverride ?? null);
       if (unchanged) return;
 
       savingRef.current = true;
@@ -213,6 +293,18 @@ function EditableTransactionRowInner({
       formData.set("taxMode", nextMode);
       formData.set("notes", nextNotes);
       formData.set("bankAccountId", nextBank);
+      if (taxBasisChanged) {
+        formData.set("clearTaxAmountOverrides", "true");
+      } else {
+        formData.set(
+          "salesTaxAmountOverride",
+          nextSalesTaxOverride == null ? "" : String(nextSalesTaxOverride),
+        );
+        formData.set(
+          "provinceTaxAmountOverride",
+          nextPstOverride == null ? "" : String(nextPstOverride),
+        );
+      }
       try {
         const result = await updateTransactionCategoryAction(undefined, formData);
         if (result.ok && result.patch) {
@@ -237,6 +329,10 @@ function EditableTransactionRowInner({
       localTaxCodes,
       localProvinceTaxCodes,
       taxMode,
+      salesTaxAmount,
+      provinceTaxAmount,
+      calcAuto.salesTaxCalculated,
+      calcAuto.provinceTaxCalculated,
       notes,
       tx,
       onPatched,
@@ -495,10 +591,42 @@ function EditableTransactionRowInner({
         )}
       </td>
       <td className="num col-amt" data-salestaxamt={tx.id}>
-        ${calc.salesTaxAmount.toFixed(2)}
+        {canEdit ? (
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={salesTaxAmount}
+            onChange={(e) => setSalesTaxAmount(e.target.value)}
+            onBlur={() => void persist()}
+            title={
+              tx.salesTaxAmountOverride != null
+                ? "Manual sales tax amount (auto-recalc when amount or tax codes change)"
+                : "From sales tax codes — edit to override"
+            }
+          />
+        ) : (
+          `$${calc.salesTaxAmount.toFixed(2)}`
+        )}
       </td>
       <td className="num col-amt" data-pstamt={tx.id}>
-        ${calc.provinceTaxAmount.toFixed(2)}
+        {canEdit ? (
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={provinceTaxAmount}
+            onChange={(e) => setProvinceTaxAmount(e.target.value)}
+            onBlur={() => void persist()}
+            title={
+              tx.provinceTaxAmountOverride != null
+                ? "Manual PST amount (auto-recalc when amount or tax codes change)"
+                : "From PST code — edit to override"
+            }
+          />
+        ) : (
+          `$${calc.provinceTaxAmount.toFixed(2)}`
+        )}
       </td>
       <td className="num col-amt" data-netamt={tx.id}>
         ${calc.netAmount.toFixed(2)}

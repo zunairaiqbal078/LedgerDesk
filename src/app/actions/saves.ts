@@ -2,28 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { canEditTransactions, hasMinOrgRole } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
+import {
+  taxAmountOverrideUpdate,
+  toTransactionRowPatch,
+  transactionPatchSelect,
+  type TransactionRowPatch,
+} from "@/lib/transaction-row-patch";
 
-export type TransactionRowPatch = {
-  id: string;
-  bankAccountId: string;
-  date: string;
-  description: string;
-  moneyIn: number;
-  moneyOut: number;
-  accountNumber: string | null;
-  accountName: string | null;
-  province: string | null;
-  taxCodes: string[];
-  provinceTaxCodes: string[];
-  taxMode: string;
-  notes: string | null;
-  bankName: string;
-  bankType: "BANK" | "CREDIT_CARD";
-};
+export type { TransactionRowPatch };
 
 export type ActionResult = {
   ok: boolean;
@@ -566,20 +557,7 @@ export async function updateTransactionCategoryAction(
     catalog,
   );
 
-  const data: {
-    description: string;
-    accountNumber: string | null;
-    accountName: string | null;
-    taxCodes: string[];
-    provinceTaxCodes: string[];
-    taxMode: "INCLUSIVE" | "EXCLUSIVE";
-    province: string | null;
-    notes: string | null;
-    moneyIn?: number;
-    moneyOut?: number;
-    date?: Date;
-    bankAccountId?: string;
-  } = {
+  const data: Prisma.TransactionUncheckedUpdateInput = {
     description,
     accountNumber: accountNumber || null,
     accountName,
@@ -611,10 +589,28 @@ export async function updateTransactionCategoryAction(
     }
   }
 
+  const parseOverride = (key: string): number | null | undefined => {
+    if (!formData.has(key)) return undefined;
+    const raw = String(formData.get(key) ?? "").trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 100) / 100;
+  };
+  const clearOverrides = formData.get("clearTaxAmountOverrides") === "true";
+  const taxOverrides = taxAmountOverrideUpdate(
+    clearOverrides,
+    parseOverride("salesTaxAmountOverride"),
+    parseOverride("provinceTaxAmountOverride"),
+  );
+
   const updated = await prisma.transaction.update({
     where: { id },
-    data,
-    include: { bankAccount: true },
+    data: {
+      ...data,
+      ...taxOverrides,
+    },
+    select: transactionPatchSelect,
   });
 
   const inline = formData.get("inline") === "true";
@@ -628,22 +624,6 @@ export async function updateTransactionCategoryAction(
   return {
     ok: true,
     message: inline ? undefined : "Category saved.",
-    patch: {
-      id: updated.id,
-      bankAccountId: updated.bankAccountId,
-      date: updated.date.toISOString().slice(0, 10),
-      description: updated.description,
-      moneyIn: Number(updated.moneyIn),
-      moneyOut: Number(updated.moneyOut),
-      accountNumber: updated.accountNumber,
-      accountName: updated.accountName,
-      province: updated.province,
-      taxCodes: updated.taxCodes,
-      provinceTaxCodes: updated.provinceTaxCodes,
-      taxMode: updated.taxMode,
-      notes: updated.notes,
-      bankName: updated.bankAccount.name,
-      bankType: updated.bankAccount.type,
-    },
+    patch: toTransactionRowPatch(updated),
   };
 }

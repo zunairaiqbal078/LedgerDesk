@@ -354,6 +354,10 @@ model Transaction {
   taxCodes             String[]  @default([]) // Sales tax (GST/HST)
   provinceTaxCodes     String[]  @default([]) // Province tax (PST/QST/RST)
   taxMode              TaxMode   @default(INCLUSIVE)
+  /// When set, workspace shows this instead of amount derived from sales tax codes.
+  salesTaxAmountOverride Decimal? @db.Decimal(14, 2)
+  /// When set, workspace shows this instead of amount derived from PST codes.
+  provinceTaxAmountOverride Decimal? @db.Decimal(14, 2)
   notes                String?
   externalTransactionId String?
   transferMatchId      String?

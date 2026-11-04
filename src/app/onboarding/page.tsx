@@ -4,6 +4,8 @@ import { requireSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
 
+export const dynamic = "force-dynamic";
+
 export default async function OnboardingPage() {
   const session = await requireSession();
   const membership = await prisma.membership.findFirst({
