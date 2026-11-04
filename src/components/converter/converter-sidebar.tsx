@@ -2,11 +2,20 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useActionState, useCallback, useEffect, useRef, useState } from "react";
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { CONVERTER_EVENTS, dispatchConverterEvent } from "@/lib/converter-events";
 import {
+  deleteBankAction,
   deleteClientOrganizationAction,
   deleteMyBusinessCompanyAction,
   setActiveBankAction,
@@ -25,10 +34,19 @@ import {
 } from "@/components/edit-company-modal";
 import type { OrganizationKind, OrgRole } from "@prisma/client";
 import { Badge } from "@/components/ui";
-import { canSeeClientWorkspace, canSeeLicensePanel } from "@/lib/permissions";
+import {
+  canManageBanks,
+  canSeeClientWorkspace,
+  canSeeLicensePanel,
+} from "@/lib/permissions";
 import { CollapsibleSection } from "@/components/converter/collapsible-section";
 import { preferredFolderStorageKey } from "@/lib/conversion-export";
-import { isImportBusyStatus, stashPendingImportFiles } from "@/lib/pending-import";
+import {
+  isImportBusyStatus,
+  isTransactionsImportSurface,
+  stashPendingImportFiles,
+  TRANSACTIONS_IMPORT_PATH,
+} from "@/lib/pending-import";
 import { cn } from "@/lib/utils";
 
 const DATE_FORMATS = [
@@ -231,6 +249,8 @@ export function ConverterSidebar({
     ActionResult | undefined,
     FormData
   >(deleteMyBusinessCompanyAction, undefined);
+  const [deleteBankPending, startDeleteBank] = useTransition();
+  const canDeleteBanks = canManageBanks(orgRole);
 
   useEffect(() => {
     if (deleteState?.ok) {
@@ -283,14 +303,12 @@ export function ConverterSidebar({
           : `Importing ${supported.length} statements…`;
       setImportStatus(label);
 
-      // Import listener lives on Transactions tab — switch there if needed
+      // Import listener lives on Transactions workspace only (/app?tab=transactions)
       const tab =
         typeof window !== "undefined"
           ? new URLSearchParams(window.location.search).get("tab")
           : null;
-      const onTransactions =
-        (pathname === "/app" || pathname.startsWith("/app/")) &&
-        (!tab || tab === "transactions");
+      const onTransactions = isTransactionsImportSurface(pathname, tab);
 
       const dispatch = () => {
         if (supported.length === 1) {
@@ -303,7 +321,7 @@ export function ConverterSidebar({
       if (!onTransactions) {
         stashPendingImportFiles(supported);
         setImportStatus(`${label} Opening Transactions…`);
-        router.push("/app");
+        router.push(TRANSACTIONS_IMPORT_PATH);
         return;
       }
       dispatch();
@@ -339,10 +357,52 @@ export function ConverterSidebar({
     localStorage.setItem("ledgerdesk-statement-type", value);
   }
 
-  const matchingBanks = banks.filter((bank) =>
-    statementType === "Credit Card" ? bank.type === "CREDIT_CARD" : bank.type === "BANK",
+  const connectedBankOptions = useMemo(
+    () => [...banks].sort((a, b) => a.name.localeCompare(b.name)),
+    [banks],
   );
-  const connectedBankOptions = matchingBanks.length ? matchingBanks : banks;
+  const [selectedBankId, setSelectedBankId] = useState(activeBankId ?? "");
+
+  useEffect(() => {
+    setSelectedBankId(activeBankId ?? "");
+  }, [activeBankId]);
+
+  const selectedBank = selectedBankId
+    ? banks.find((b) => b.id === selectedBankId) ?? null
+    : null;
+
+  function bankOptionLabel(bank: Bank) {
+    return `${bank.name}${bank.mask ? ` •••• ${bank.mask}` : ""}${
+      bank.type === "CREDIT_CARD" ? " (card)" : " (bank)"
+    }`;
+  }
+
+  function deleteConnectedBank() {
+    if (!selectedBankId || !selectedBank) {
+      toast.error("Select the account you want to delete from the dropdown.");
+      return;
+    }
+    const label = bankOptionLabel(selectedBank);
+    if (
+      !confirm(
+        `Delete “${label}”?\n\nOnly this account is removed. Your other bank/card accounts stay.\n\nAll transactions and reconciliations on this account will be permanently deleted. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    startDeleteBank(async () => {
+      const fd = new FormData();
+      fd.set("id", selectedBankId);
+      const result = await deleteBankAction(fd);
+      if (result.ok) {
+        toast.success(result.message ?? "Account deleted");
+        setSelectedBankId("");
+        router.refresh();
+      } else {
+        toast.error(result.error ?? "Could not delete account");
+      }
+    });
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -389,23 +449,48 @@ export function ConverterSidebar({
           <label className="mt-2 block text-[11px] font-semibold text-[#52697a]">
             Connected account
           </label>
+          {banks.length > 1 ? (
+            <p className="mb-1 text-[11px] leading-snug text-[#52697a]">
+              {banks.length} accounts — pick one for imports. Delete removes{" "}
+              <strong>only</strong> the selected account; others stay.
+            </p>
+          ) : null}
           <form action={setActiveBankAction}>
             <select
               name="bankId"
-              defaultValue={activeBankId ?? ""}
+              value={selectedBankId}
               className="h-9 w-full rounded-lg border border-[#d6e1e9] bg-white px-2 text-sm"
-              onChange={(e) => e.currentTarget.form?.requestSubmit()}
+              onChange={(e) => {
+                const id = e.target.value;
+                setSelectedBankId(id);
+                if (id) e.currentTarget.form?.requestSubmit();
+              }}
             >
               <option value="">— No connected account —</option>
               {connectedBankOptions.map((bank) => (
                 <option key={bank.id} value={bank.id}>
-                  {bank.name}
-                  {bank.mask ? ` •••• ${bank.mask}` : ""}
-                  {bank.type === "CREDIT_CARD" ? " (card)" : ""}
+                  {bankOptionLabel(bank)}
                 </option>
               ))}
             </select>
           </form>
+          {canDeleteBanks && selectedBank ? (
+            <button
+              type="button"
+              className="btn-converter btn-danger btn-sm mt-2 w-full"
+              disabled={deleteBankPending}
+              onClick={deleteConnectedBank}
+              title={`Delete ${selectedBank.name} only`}
+            >
+              {deleteBankPending
+                ? "Deleting…"
+                : `Delete “${selectedBank.name}”`}
+            </button>
+          ) : canDeleteBanks && banks.length > 0 ? (
+            <p className="mt-2 text-[11px] leading-snug text-[#52697a]">
+              Select an account in the list to delete it.
+            </p>
+          ) : null}
         </CollapsibleSection>
 
         <CollapsibleSection title="Statement Import" defaultOpen={true}>
@@ -766,7 +851,7 @@ export function ConverterSidebar({
             Accounts / Categories
           </SidebarLink>
           <SidebarLink href="/app/rules" active={pathname.startsWith("/app/rules")}>
-            Rules
+            Auto Category
           </SidebarLink>
         </CollapsibleSection>
 

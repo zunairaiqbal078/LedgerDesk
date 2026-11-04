@@ -2,6 +2,14 @@
 
 const KEY = "__ledgerdeskPendingImportFiles";
 
+/** URL where TransactionsWorkspace listens for imports. */
+export const TRANSACTIONS_IMPORT_PATH = "/app?tab=transactions";
+
+/** True only when the transactions workspace is mounted (not /app/tax-codes, etc.). */
+export function isTransactionsImportSurface(pathname: string, tab: string | null): boolean {
+  return pathname === "/app" && (!tab || tab === "transactions");
+}
+
 export function stashPendingImportFiles(files: File[]) {
   if (typeof window === "undefined") return;
   (window as unknown as Record<string, File[]> )[KEY] = files;

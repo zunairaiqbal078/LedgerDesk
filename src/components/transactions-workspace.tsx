@@ -38,6 +38,12 @@ import { EditableTransactionRow } from "@/components/editable-transaction-row";
 import { SaveConversionDialog } from "@/components/save-conversion-dialog";
 import { ImportGuardModal } from "@/components/import-guard-modal";
 import {
+  ImportPreviewEditor,
+  importPreviewFromPending,
+  importPreviewToPending,
+  type ImportPreviewRow,
+} from "@/components/import-preview-editor";
+import {
   ImportParseLoading,
   SIDEBAR_PARSE_MESSAGES,
 } from "@/components/import-parse-loading";
@@ -232,7 +238,8 @@ export function TransactionsWorkspace({
   const [pendingLabel, setPendingLabel] = useState("");
   const [parseLoadingFile, setParseLoadingFile] = useState<string | null>(null);
   const [parseLoadingStatus, setParseLoadingStatus] = useState<string | null>(null);
-  const [previewExpanded, setPreviewExpanded] = useState(true);
+  const [importPreviewRows, setImportPreviewRows] = useState<ImportPreviewRow[]>([]);
+  const [importPreviewSkipped, setImportPreviewSkipped] = useState(0);
   const [pendingBankHint, setPendingBankHint] = useState<{
     institutionName: string | null;
     statementType: "BANK" | "CREDIT_CARD" | null;
@@ -428,7 +435,6 @@ export function TransactionsWorkspace({
     setPendingRows(rows);
     setPendingLabel(label);
     setPendingBankHint(bankHint ?? null);
-    setPreviewExpanded(true);
     setPreviewSwapSides(false);
     setImportBankMode(banks.length ? "existing" : "new");
     setImportBankId(activeBankId ?? banks[0]?.id ?? "");
@@ -873,7 +879,6 @@ export function TransactionsWorkspace({
       );
       setImportBankMode(banks.length ? "existing" : "new");
       setImportBankId(activeBankId ?? banks[0]?.id ?? "");
-      setPreviewExpanded(true);
       setImportOpen(true);
       okStatus = "Ready — review the preview, then import.";
     } catch (error) {
@@ -973,11 +978,29 @@ export function TransactionsWorkspace({
     return banks.find((b) => b.id === importBankId)?.type ?? newBankType;
   }, [importBankMode, newBankType, banks, importBankId]);
 
-  /** Preview + import rows after optional manual Debit/Credit swap. */
-  const previewPendingRows = useMemo(() => {
-    if (!pendingRows) return null;
-    return previewSwapSides ? swapMoneySides(pendingRows) : pendingRows;
-  }, [pendingRows, previewSwapSides]);
+  useEffect(() => {
+    if (!importOpen) return;
+    if (matrix && mapping) {
+      const mapped = mapRowsToTransactions(matrix, mapping);
+      const swapped = previewSwapSides ? swapMoneySides(mapped.rows) : mapped.rows;
+      setImportPreviewSkipped(mapped.errors.length);
+      setImportPreviewRows(importPreviewFromPending(rowsFromParsed(swapped)));
+      return;
+    }
+    if (pendingRows) {
+      const swapped = previewSwapSides ? swapMoneySides(pendingRows) : pendingRows;
+      setImportPreviewSkipped(0);
+      setImportPreviewRows(importPreviewFromPending(swapped));
+      return;
+    }
+    setImportPreviewSkipped(0);
+    setImportPreviewRows([]);
+  }, [importOpen, matrix, mapping, pendingRows, previewSwapSides]);
+
+  const rowsReadyToImport = useMemo(
+    () => importPreviewToPending(importPreviewRows),
+    [importPreviewRows],
+  );
 
   function setImportStatementType(type: "BANK" | "CREDIT_CARD") {
     setNewBankType(type);
@@ -992,29 +1015,23 @@ export function TransactionsWorkspace({
     }
   }
 
-  function confirmMappedImport() {
-    if (!matrix || !mapping) return;
-    const { rows, errors } = mapRowsToTransactions(matrix, mapping);
-    if (!rows.length) {
-      const hint = errors[0]
-        ? ` ${errors[0]}`
-        : " Check Date / Description / Debit-Credit column mapping and date format.";
-      toast.error(`No valid transactions to import.${hint}`);
-      if (errors.length > 1) {
-        toast.message(`${errors.length} rows could not be mapped. Try DD/MM/YYYY date format.`);
-      }
+  function confirmImportFromPreview() {
+    if (!rowsReadyToImport.length) {
+      toast.error("No transactions to import. Add rows or fix the preview.");
       return;
     }
-    if (errors.length) {
-      toast.message(`Imported ${rows.length}; skipped ${errors.length} row(s).`);
+    if (importPreviewSkipped > 0) {
+      toast.message(
+        `Importing ${rowsReadyToImport.length} edited row(s). Parser skipped ${importPreviewSkipped} row(s) from the file.`,
+      );
     }
-    const pending = rowsFromParsed(rows);
-    submitImport(previewSwapSides ? swapMoneySides(pending) : pending);
+    submitImport(rowsReadyToImport);
   }
 
-  function confirmDirectImport() {
-    if (!previewPendingRows?.length) return;
-    submitImport(previewPendingRows);
+  function closeImportModal() {
+    setImportOpen(false);
+    setImportPreviewRows([]);
+    setImportPreviewSkipped(0);
   }
 
   function submitImport(rows: PendingRows) {
@@ -1036,6 +1053,8 @@ export function TransactionsWorkspace({
           setMatrix(null);
           setMapping(null);
           setPendingRows(null);
+          setImportPreviewRows([]);
+          setImportPreviewSkipped(0);
           setPreviewSwapSides(false);
           setSelected(new Set());
         } else {
@@ -1615,7 +1634,7 @@ export function TransactionsWorkspace({
 
       {importOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <Card className="max-h-[90vh] w-full max-w-4xl overflow-auto p-6">
+          <Card className="max-h-[90vh] w-full max-w-6xl overflow-auto p-6">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold">
@@ -1623,7 +1642,7 @@ export function TransactionsWorkspace({
                 </h2>
                 <p className="text-sm text-slate-500">{pendingLabel}</p>
               </div>
-              <Button type="button" variant="ghost" onClick={() => setImportOpen(false)}>
+              <Button type="button" variant="ghost" onClick={closeImportModal}>
                 Close
               </Button>
             </div>
@@ -1822,123 +1841,47 @@ export function TransactionsWorkspace({
                     </Select>
                   </div>
                 </div>
-                {(() => {
-                  const preview = mapRowsToTransactions(matrix, mapping);
-                  const previewRows = previewSwapSides
-                    ? swapMoneySides(preview.rows)
-                    : preview.rows;
-                  const maskedSample = previewRows
-                    .slice(0, 8)
-                    .filter((r) => /\*{2,}/.test(r.description)).length;
-                  return (
-                    <>
-                      <p className="mt-3 text-sm text-slate-600">
-                        Preview:{" "}
-                        <span className="font-semibold text-teal-800">
-                          {previewRows.length} valid
-                        </span>
-                        {preview.errors.length ? (
-                          <span className="text-rose-700">
-                            {" "}
-                            · {preview.errors.length} skipped ({preview.errors[0]})
-                          </span>
-                        ) : null}
-                        {previewSwapSides ? (
-                          <span className="text-teal-800"> · Debit/Credit swapped</span>
-                        ) : null}
-                      </p>
-                      {maskedSample > 0 ? (
-                        <p className="mt-2 text-sm text-amber-800">
-                          Some descriptions look bank-masked (***). If your file has a longer memo or
-                          details column, map it under <strong>Description</strong> above — not only
-                          Payee/Name.
-                        </p>
-                      ) : null}
-                      <div className="mt-4 overflow-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-50">
-                            <tr>
-                              <th className="px-3 py-2 whitespace-nowrap">Date</th>
-                              <th className="px-3 py-2 min-w-[280px]">Description (imported)</th>
-                              <th className="px-3 py-2 whitespace-nowrap">Money In</th>
-                              <th className="px-3 py-2 whitespace-nowrap">Money Out</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {previewRows.slice(0, 8).map((row, idx) => (
-                              <tr key={idx} className="border-t border-slate-100">
-                                <td className="px-3 py-2 whitespace-nowrap">
-                                  {row.date.toISOString().slice(0, 10)}
-                                </td>
-                                <td className="px-3 py-2">{row.description}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">
-                                  {row.moneyIn ? row.moneyIn.toFixed(2) : ""}
-                                </td>
-                                <td className="px-3 py-2 whitespace-nowrap">
-                                  {row.moneyOut ? row.moneyOut.toFixed(2) : ""}
-                                </td>
-                              </tr>
+                {importPreviewRows.some((r) => /\*{2,}/.test(r.description)) ? (
+                  <p className="mt-2 text-sm text-amber-800">
+                    Some descriptions look bank-masked (***). If your file has a longer memo or
+                    details column, map it under <strong>Description</strong> above — not only
+                    Payee/Name.
+                  </p>
+                ) : null}
+                <details className="mt-3 text-xs text-slate-500">
+                  <summary className="cursor-pointer font-semibold text-slate-600">
+                    Raw file columns (first 5 rows)
+                  </summary>
+                  <div className="mt-2 overflow-auto rounded-lg border border-slate-200">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          {matrix.headers.map((header) => (
+                            <th key={header} className="px-2 py-1 whitespace-nowrap">
+                              {header}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matrix.rows.slice(0, 5).map((row, idx) => (
+                          <tr key={idx} className="border-t border-slate-100">
+                            {row.map((cell, cellIdx) => (
+                              <td key={cellIdx} className="px-2 py-1 whitespace-nowrap">
+                                {cell}
+                              </td>
                             ))}
-                            {!previewRows.length ? (
-                              <tr>
-                                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                                  No valid rows with current column mapping.
-                                </td>
-                              </tr>
-                            ) : null}
-                          </tbody>
-                        </table>
-                      </div>
-                      <details className="mt-3 text-xs text-slate-500">
-                        <summary className="cursor-pointer font-semibold text-slate-600">
-                          Raw file columns (first 5 rows)
-                        </summary>
-                        <div className="mt-2 overflow-auto rounded-lg border border-slate-200">
-                          <table className="w-full text-left text-xs">
-                            <thead className="bg-slate-50">
-                              <tr>
-                                {matrix.headers.map((header) => (
-                                  <th key={header} className="px-2 py-1 whitespace-nowrap">
-                                    {header}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {matrix.rows.slice(0, 5).map((row, idx) => (
-                                <tr key={idx} className="border-t border-slate-100">
-                                  {row.map((cell, cellIdx) => (
-                                    <td key={cellIdx} className="px-2 py-1 whitespace-nowrap">
-                                      {cell}
-                                    </td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </details>
-                    </>
-                  );
-                })()}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
               </>
             ) : (
               <div>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm text-slate-600">
-                    Ready to import <strong>{previewPendingRows?.length ?? 0}</strong> detected
-                    transactions.
-                  </p>
-                  <button
-                    type="button"
-                    className="text-sm font-semibold text-teal-800 hover:underline"
-                    onClick={() => setPreviewExpanded((v) => !v)}
-                  >
-                    {previewExpanded ? "Hide preview" : "Show preview"}
-                  </button>
-                </div>
                 {previewSwapSides ? (
-                  <p className="mt-2 text-sm text-teal-800">
+                  <p className="text-sm text-teal-800">
                     Debit/Credit swapped for this import — Deposit → Money In, Withdrawal → Money
                     Out (after flip).
                   </p>
@@ -1973,53 +1916,14 @@ export function TransactionsWorkspace({
                     )}
                   </div>
                 ) : null}
-                {previewPendingRows && previewPendingRows.length > 0 ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Money in $
-                    {previewPendingRows.reduce((s, r) => s + (r.moneyIn || 0), 0).toFixed(2)}
-                    {" · "}
-                    money out $
-                    {previewPendingRows.reduce((s, r) => s + (r.moneyOut || 0), 0).toFixed(2)}
-                    {" · "}
-                    deposits {previewPendingRows.filter((r) => r.moneyIn > 0).length}
-                    {" / "}
-                    withdrawals {previewPendingRows.filter((r) => r.moneyOut > 0).length}
-                  </p>
-                ) : null}
-                {previewExpanded && previewPendingRows?.length ? (
-                  <div className="mt-3 max-h-72 overflow-auto rounded-xl border border-slate-200">
-                    <table className="w-full text-left text-xs">
-                      <thead className="sticky top-0 bg-slate-50">
-                        <tr>
-                          <th className="px-3 py-2 w-10">#</th>
-                          <th className="px-3 py-2 whitespace-nowrap">Date</th>
-                          <th className="px-3 py-2 min-w-[220px]">Description</th>
-                          <th className="px-3 py-2 whitespace-nowrap text-right">Money In</th>
-                          <th className="px-3 py-2 whitespace-nowrap text-right">Money Out</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {previewPendingRows.map((row, idx) => (
-                          <tr key={`${row.date}-${idx}`} className="border-t border-slate-100">
-                            <td className="px-3 py-1.5 text-slate-400">{idx + 1}</td>
-                            <td className="px-3 py-1.5 whitespace-nowrap">
-                              {row.date.slice(0, 10)}
-                            </td>
-                            <td className="px-3 py-1.5">{row.description}</td>
-                            <td className="px-3 py-1.5 whitespace-nowrap text-right text-emerald-700">
-                              {row.moneyIn ? row.moneyIn.toFixed(2) : ""}
-                            </td>
-                            <td className="px-3 py-1.5 whitespace-nowrap text-right text-rose-700">
-                              {row.moneyOut ? row.moneyOut.toFixed(2) : ""}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
               </div>
             )}
+
+            <ImportPreviewEditor
+              rows={importPreviewRows}
+              onChange={setImportPreviewRows}
+              skippedCount={importPreviewSkipped}
+            />
 
             <label className="mt-4 flex items-center gap-2 text-sm font-medium">
               <input
@@ -2031,15 +1935,19 @@ export function TransactionsWorkspace({
             </label>
 
             <div className="mt-5 flex justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={() => setImportOpen(false)}>
+              <Button type="button" variant="secondary" onClick={closeImportModal}>
                 Cancel
               </Button>
               <Button
                 type="button"
                 disabled={pending}
-                onClick={matrix ? confirmMappedImport : confirmDirectImport}
+                onClick={confirmImportFromPreview}
               >
-                {pending ? "Importing…" : "Import transactions"}
+                {pending
+                  ? "Importing…"
+                  : `Import ${rowsReadyToImport.length} transaction${
+                      rowsReadyToImport.length === 1 ? "" : "s"
+                    }`}
               </Button>
             </div>
           </Card>
