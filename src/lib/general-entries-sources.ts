@@ -11,8 +11,10 @@ type SnapshotTx = {
   accountNumber?: string | null;
   accountName?: string | null;
   taxCodes?: string[];
+  provinceTaxCodes?: string[];
   taxMode?: string;
   transferMatchId?: string | null;
+  province?: string | null;
 };
 
 export function parseGeCustomDateStart(isoDate: string): Date | null {
@@ -78,6 +80,7 @@ function snapshotRowToGeTx(
     accountNumber: row.accountNumber ?? null,
     accountName: row.accountName ?? null,
     taxCodes: row.taxCodes ?? [],
+    provinceTaxCodes: row.provinceTaxCodes ?? [],
     taxMode:
       row.taxMode === "EXCLUSIVE"
         ? "EXCLUSIVE"
@@ -85,6 +88,7 @@ function snapshotRowToGeTx(
           ? "KEEP"
           : "INCLUSIVE",
     transferMatchId: row.transferMatchId ?? null,
+    province: row.province ?? null,
     bankAccountId,
     bankName: bank.name,
     bankType: bank.type,
@@ -162,8 +166,10 @@ export async function loadTransactionsForGeneralEntries(
       accountNumber: tx.accountNumber,
       accountName: tx.accountName,
       taxCodes: tx.taxCodes,
+      provinceTaxCodes: tx.provinceTaxCodes,
       taxMode: tx.taxMode,
       transferMatchId: tx.transferMatchId,
+      province: tx.province,
       bankAccountId: tx.bankAccountId,
       bankName: tx.bankAccount.name,
       bankType: tx.bankAccount.type,

@@ -6,11 +6,8 @@ import { TaxTransactionBrowser } from "@/components/tax/tax-transaction-browser"
 import { prisma } from "@/lib/db";
 import { requireOrgContext } from "@/lib/session";
 import { provinceTaxProfileText } from "@/lib/province-tax-profile";
-import {
-  calculateGstSummary,
-  normalizeTaxCodeAssignment,
-  type Period,
-} from "@/lib/tax-reports";
+import { calculateGstSummary, type Period } from "@/lib/tax-reports";
+import { loadTransactionsForTaxReports } from "@/lib/tax-transaction-sources";
 import type { TaxPdfLine } from "@/lib/tax-report-pdf";
 import { TaxClearAllButton } from "@/components/tax/tax-clear-all-button";
 import { canEditTransactions } from "@/lib/permissions";
@@ -58,68 +55,21 @@ export default async function GstPane({
       }
     : null;
 
-  const [taxCodes, chart] = await Promise.all([
-    prisma.taxCode.findMany({ where: { organizationId: organization.id } }),
-    prisma.chartAccount.findMany({
-      where: { organizationId: organization.id },
-      select: { number: true, name: true, type: true },
-    }),
-  ]);
-
-  const transactions = period
-    ? await prisma.transaction.findMany({
-        where: {
-          organizationId: organization.id,
-          date: { gte: period.start, lte: period.end },
-        },
-        orderBy: { date: "asc" },
-        select: {
-          id: true,
-          date: true,
-          description: true,
-          moneyIn: true,
-          moneyOut: true,
-          accountNumber: true,
-          accountName: true,
-          taxCodes: true,
-          provinceTaxCodes: true,
-          taxMode: true,
-          transferMatchId: true,
-          province: true,
-        },
-      })
-    : [];
-
-  const typeByNumber = new Map(chart.map((a) => [a.number, a.type]));
-  const typeByName = new Map(chart.map((a) => [a.name, a.type]));
-
+  const taxCodes = await prisma.taxCode.findMany({
+    where: { organizationId: organization.id },
+  });
   const catalog = taxCodes.map((t) => ({
     code: t.code,
     rate: Number(t.rate),
     kind: t.kind as "GST_HST" | "PST" | "OTHER" | "NONE",
   }));
 
-  const txNormalized = transactions.map((tx) => {
-    const normalized = normalizeTaxCodeAssignment(tx.taxCodes, tx.provinceTaxCodes ?? [], catalog);
-    return {
-      id: tx.id,
-      date: tx.date,
-      description: tx.description,
-      moneyIn: Number(tx.moneyIn),
-      moneyOut: Number(tx.moneyOut),
-      accountNumber: tx.accountNumber,
-      accountName: tx.accountName,
-      accountType:
-        (tx.accountNumber ? typeByNumber.get(tx.accountNumber) : undefined) ??
-        (tx.accountName ? typeByName.get(tx.accountName) : undefined) ??
-        null,
-      taxCodes: normalized.taxCodes,
-      provinceTaxCodes: normalized.provinceTaxCodes,
-      taxMode: tx.taxMode as "INCLUSIVE" | "EXCLUSIVE" | "KEEP",
-      transferMatchId: tx.transferMatchId,
-      province: tx.province,
-    };
-  });
+  const { transactions: txNormalized, transactionCount } = period
+    ? await loadTransactionsForTaxReports(organization.id, {
+        start: period.start,
+        end: period.end,
+      })
+    : { transactions: [], transactionCount: 0 };
 
   const summary = period ? calculateGstSummary(txNormalized, catalog, period) : null;
 
@@ -172,7 +122,8 @@ export default async function GstPane({
         ) : (
           " · Set client province in Settings for import/tax defaults."
         )}{" "}
-        · {transactions.length} transaction{transactions.length === 1 ? "" : "s"} in range
+        · {transactionCount} transaction{transactionCount === 1 ? "" : "s"} in range (saved
+        folders + unsaved import)
       </p>
 
       <Suspense fallback={null}>
@@ -185,9 +136,10 @@ export default async function GstPane({
         </p>
       ) : (
         <p className="gst-note">
-          Taxable / non-taxable sales come from <strong>Income</strong> categories. ITCs come from
-          GST/HST-coded <strong>Expense</strong> or <strong>Asset</strong> transactions. CRA
-          remittances and matched transfers are excluded.
+          Includes all <strong>saved folder</strong> snapshots plus any <strong>unsaved</strong> rows
+          in Transactions — not only the folder currently loaded. Taxable / non-taxable sales come
+          from <strong>Income</strong> categories. ITCs come from GST/HST-coded{" "}
+          <strong>Expense</strong> or <strong>Asset</strong> transactions.
         </p>
       )}
 

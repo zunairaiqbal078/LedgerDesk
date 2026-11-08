@@ -7,7 +7,9 @@ export type GeTx = {
   accountNumber: string | null;
   accountName: string | null;
   taxCodes: string[];
+  provinceTaxCodes: string[];
   taxMode: "INCLUSIVE" | "EXCLUSIVE" | "KEEP";
+  province?: string | null;
   transferMatchId?: string | null;
   bankAccountId: string;
   bankName: string;
