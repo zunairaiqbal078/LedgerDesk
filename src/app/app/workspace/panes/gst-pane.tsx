@@ -12,6 +12,8 @@ import {
   type Period,
 } from "@/lib/tax-reports";
 import type { TaxPdfLine } from "@/lib/tax-report-pdf";
+import { TaxClearAllButton } from "@/components/tax/tax-clear-all-button";
+import { canEditTransactions } from "@/lib/permissions";
 
 function parseUtcDate(value: string | undefined, endOfDay = false): Date | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -37,7 +39,8 @@ export default async function GstPane({
   }>;
 }) {
   const params = await searchParams;
-  const { organization } = await requireOrgContext("VIEWER");
+  const { organization, role } = await requireOrgContext("VIEWER");
+  const canClearBooks = canEditTransactions(role);
 
   const defaults = defaultRange();
   const startStr = params.customStart || defaults.start;
@@ -136,29 +139,30 @@ export default async function GstPane({
   return (
     <div className="space-y-4">
       <div className="toolbar">
-        {summary && period ? (
-          <GstReportActions
-            clientName={organization.name}
-            frequencyLabel="Custom"
-            periodLabel={period.label}
-            start={startStr}
-            end={endStr}
-            totals={{
-              taxableSales: summary.taxableSales,
-              nonTaxableSales: summary.nonTaxableSales,
-              gstCollected: summary.gstCollected,
-              itcPaid: summary.itcPaid,
-              gstPayable: summary.gstPayable,
-            }}
-            lines={pdfLines}
-          />
-        ) : (
-          <div className="toolbar-left">
+        <div className="toolbar-left flex flex-wrap items-center gap-2">
+          {summary && period ? (
+            <GstReportActions
+              clientName={organization.name}
+              frequencyLabel="Custom"
+              periodLabel={period.label}
+              start={startStr}
+              end={endStr}
+              totals={{
+                taxableSales: summary.taxableSales,
+                nonTaxableSales: summary.nonTaxableSales,
+                gstCollected: summary.gstCollected,
+                itcPaid: summary.itcPaid,
+                gstPayable: summary.gstPayable,
+              }}
+              lines={pdfLines}
+            />
+          ) : (
             <button type="button" className="btn-converter btn-green" disabled>
               Refresh GST Calculation
             </button>
-          </div>
-        )}
+          )}
+          {canClearBooks ? <TaxClearAllButton /> : null}
+        </div>
       </div>
 
       <p className="text-sm text-slate-600">

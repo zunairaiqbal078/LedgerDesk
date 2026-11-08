@@ -1473,6 +1473,14 @@ export async function duplicateTransactionsAction(formData: FormData): Promise<A
   };
 }
 
+function revalidateBooksWorkspace() {
+  revalidatePath("/app");
+  revalidatePath("/app/gst");
+  revalidatePath("/app/pst");
+  revalidatePath("/app/general-entries");
+  revalidatePath("/app/reconciliation");
+}
+
 export async function deleteAllTransactionsAction(): Promise<ActionResult> {
   const { organization, activeBankId, role } = await requireOrgContext("BOOKKEEPER");
   if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
@@ -1483,11 +1491,30 @@ export async function deleteAllTransactionsAction(): Promise<ActionResult> {
       ...(activeBankId ? { bankAccountId: activeBankId } : {}),
     },
   });
-  revalidatePath("/app");
+  revalidateBooksWorkspace();
   return {
     ok: true,
     count: result.count,
     message: `Cleared ${result.count} transaction${result.count === 1 ? "" : "s"}.`,
+  };
+}
+
+/** All banks — resets GST/PST calculations that use every transaction in the company. */
+export async function clearAllCompanyTransactionsAction(): Promise<ActionResult> {
+  const { organization, role } = await requireOrgContext("BOOKKEEPER");
+  if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
+
+  const result = await prisma.transaction.deleteMany({
+    where: { organizationId: organization.id },
+  });
+  revalidateBooksWorkspace();
+  return {
+    ok: true,
+    count: result.count,
+    message:
+      result.count === 0
+        ? "No transactions to clear — GST and PST calculations are already empty."
+        : `Cleared ${result.count} transaction${result.count === 1 ? "" : "s"} across all bank accounts. GST and PST calculations will show zero.`,
   };
 }
 
@@ -1511,7 +1538,7 @@ export async function deleteTransactionsAction(formData: FormData): Promise<Acti
   if (!result.count) {
     return { ok: false, error: "No matching transactions to delete." };
   }
-  revalidatePath("/app");
+  revalidateBooksWorkspace();
   return { ok: true, count: result.count, message: `Deleted ${result.count} transactions.` };
 }
 
