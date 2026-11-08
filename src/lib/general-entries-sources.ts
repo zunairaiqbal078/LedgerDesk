@@ -47,7 +47,61 @@ export function transactionFingerprint(tx: {
   ].join("|");
 }
 
-/** Live workspace transactions + all saved folder snapshots (deduped). */
+function snapshotRowToGeTx(
+  row: SnapshotTx,
+  savedConversionId: string,
+  defaultBankId: string | null,
+  bankById: Map<string, { id: string; name: string; type: "BANK" | "CREDIT_CARD" }>,
+): GeTxWithFp | null {
+  const bankAccountId = row.bankAccountId ?? defaultBankId;
+  if (!bankAccountId) return null;
+
+  const bank = bankById.get(bankAccountId);
+  if (!bank) return null;
+
+  const moneyIn = Number(row.moneyIn) || 0;
+  const moneyOut = Number(row.moneyOut) || 0;
+  const fp = transactionFingerprint({
+    bankAccountId,
+    date: row.date,
+    moneyIn,
+    moneyOut,
+    description: row.description,
+  });
+
+  return {
+    id: row.id ?? `saved:${savedConversionId}:${fp}`,
+    date: new Date(`${row.date.slice(0, 10)}T12:00:00.000Z`),
+    description: row.description,
+    moneyIn,
+    moneyOut,
+    accountNumber: row.accountNumber ?? null,
+    accountName: row.accountName ?? null,
+    taxCodes: row.taxCodes ?? [],
+    taxMode:
+      row.taxMode === "EXCLUSIVE"
+        ? "EXCLUSIVE"
+        : row.taxMode === "KEEP"
+          ? "KEEP"
+          : "INCLUSIVE",
+    transferMatchId: row.transferMatchId ?? null,
+    bankAccountId,
+    bankName: bank.name,
+    bankType: bank.type,
+    fingerprint: fp,
+  };
+}
+
+type GeTxWithFp = GeTx & { fingerprint?: string };
+
+/**
+ * General Entries source transactions:
+ * 1) All saved folder snapshots (every SavedConversion in the org) — always, even if
+ *    nothing is loaded in the Transactions workspace.
+ * 2) Live DB rows only when they are not already covered by a saved snapshot
+ *    (unsaved imports / manual rows). Loading a saved folder into Transactions does
+ *    not add a second copy.
+ */
 export async function loadTransactionsForGeneralEntries(
   prisma: PrismaClient,
   organizationId: string,
@@ -69,13 +123,27 @@ export async function loadTransactionsForGeneralEntries(
   ]);
 
   const bankById = new Map(banks.map((b) => [b.id, b]));
-  const seenIds = new Set<string>();
   const seenFingerprints = new Set<string>();
+  const out: GeTxWithFp[] = [];
 
-  const out: GeTx[] = [];
+  for (const saved of savedConversions) {
+    const snapshot = saved.snapshot as {
+      bankAccountId?: string | null;
+      transactions?: SnapshotTx[];
+    };
+    const defaultBankId = snapshot.bankAccountId ?? null;
+
+    for (const row of snapshot.transactions ?? []) {
+      const ge = snapshotRowToGeTx(row, saved.id, defaultBankId, bankById);
+      if (!ge?.fingerprint) continue;
+      if (seenFingerprints.has(ge.fingerprint)) continue;
+      seenFingerprints.add(ge.fingerprint);
+      const { fingerprint: _fp, ...rest } = ge;
+      out.push(rest);
+    }
+  }
 
   for (const tx of live) {
-    seenIds.add(tx.id);
     const fp = transactionFingerprint({
       bankAccountId: tx.bankAccountId,
       date: tx.date,
@@ -83,6 +151,7 @@ export async function loadTransactionsForGeneralEntries(
       moneyOut: Number(tx.moneyOut),
       description: tx.description,
     });
+    if (seenFingerprints.has(fp)) continue;
     seenFingerprints.add(fp);
     out.push({
       id: tx.id,
@@ -99,57 +168,6 @@ export async function loadTransactionsForGeneralEntries(
       bankName: tx.bankAccount.name,
       bankType: tx.bankAccount.type,
     });
-  }
-
-  for (const saved of savedConversions) {
-    const snapshot = saved.snapshot as {
-      bankAccountId?: string | null;
-      transactions?: SnapshotTx[];
-    };
-    const defaultBankId = snapshot.bankAccountId ?? null;
-
-    for (const row of snapshot.transactions ?? []) {
-      if (row.id && seenIds.has(row.id)) continue;
-
-      const bankAccountId = row.bankAccountId ?? defaultBankId;
-      if (!bankAccountId) continue;
-
-      const bank = bankById.get(bankAccountId);
-      if (!bank) continue;
-
-      const moneyIn = Number(row.moneyIn) || 0;
-      const moneyOut = Number(row.moneyOut) || 0;
-      const fp = transactionFingerprint({
-        bankAccountId,
-        date: row.date,
-        moneyIn,
-        moneyOut,
-        description: row.description,
-      });
-      if (seenFingerprints.has(fp)) continue;
-      seenFingerprints.add(fp);
-
-      out.push({
-        id: row.id ?? `saved:${saved.id}:${fp}`,
-        date: new Date(`${row.date.slice(0, 10)}T12:00:00.000Z`),
-        description: row.description,
-        moneyIn,
-        moneyOut,
-        accountNumber: row.accountNumber ?? null,
-        accountName: row.accountName ?? null,
-        taxCodes: row.taxCodes ?? [],
-        taxMode:
-          row.taxMode === "EXCLUSIVE"
-            ? "EXCLUSIVE"
-            : row.taxMode === "KEEP"
-              ? "KEEP"
-              : "INCLUSIVE",
-        transferMatchId: row.transferMatchId ?? null,
-        bankAccountId,
-        bankName: bank.name,
-        bankType: bank.type,
-      });
-    }
   }
 
   out.sort((a, b) => a.date.getTime() - b.date.getTime());

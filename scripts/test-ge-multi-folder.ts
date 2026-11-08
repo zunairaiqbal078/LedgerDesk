@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Verifies General Entries sees transactions saved across multiple folders.
  *
@@ -180,6 +181,45 @@ async function main() {
   const afterDup = await loadTransactionsForGeneralEntries(prisma, org.id);
   if (afterDup.length !== 3) {
     throw new Error(`After duplicate snapshot, expected 3 txs, got ${afterDup.length}`);
+  }
+
+  // Simulates loading folder A into Transactions (live copy) — GE must not double-count.
+  await prisma.transaction.create({
+    data: {
+      organizationId: org.id,
+      bankAccountId: bank.id,
+      date: new Date("2025-03-01T12:00:00.000Z"),
+      description: "Alpha deposit",
+      moneyIn: 100,
+      moneyOut: 0,
+      accountNumber: "4000",
+      accountName: "Sales",
+      taxCodes: [],
+      taxMode: "INCLUSIVE",
+    },
+  });
+  await prisma.transaction.create({
+    data: {
+      organizationId: org.id,
+      bankAccountId: bank.id,
+      date: new Date("2025-06-15T12:00:00.000Z"),
+      description: "Unsaved import row",
+      moneyIn: 0,
+      moneyOut: 25,
+      accountNumber: "5100",
+      accountName: "Office Expenses",
+      taxCodes: [],
+      taxMode: "INCLUSIVE",
+    },
+  });
+  const withLive = await loadTransactionsForGeneralEntries(prisma, org.id);
+  if (withLive.length !== 4) {
+    throw new Error(
+      `Expected 3 saved + 1 unsaved live, got ${withLive.length}: ${withLive.map((t) => t.description).join(", ")}`,
+    );
+  }
+  if (!withLive.some((t) => t.description === "Unsaved import row")) {
+    throw new Error("Missing unsaved live-only transaction");
   }
 
   console.log("\n✓ Multi-folder General Entries source: PASS\n");
