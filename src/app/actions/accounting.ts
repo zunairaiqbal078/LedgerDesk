@@ -595,10 +595,13 @@ export async function addReconciliationTransactionAction(
 ): Promise<ActionResult & { id?: string; row?: ReconTxPatch }> {
   const { organization, activeBankId, role } = await requireOrgContext("BOOKKEEPER");
   if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
-  if (!activeBankId) return { ok: false, error: "Select a bank first." };
+
+  const bankIdFromForm = String(formData.get("bankAccountId") ?? "").trim();
+  const bankAccountId = bankIdFromForm || activeBankId;
+  if (!bankAccountId) return { ok: false, error: "Select a bank first." };
 
   const bankOk = await prisma.bankAccount.count({
-    where: { id: activeBankId, organizationId: organization.id },
+    where: { id: bankAccountId, organizationId: organization.id },
   });
   if (!bankOk) return { ok: false, error: "Bank not found." };
 
@@ -619,7 +622,7 @@ export async function addReconciliationTransactionAction(
   const created = await prisma.transaction.create({
     data: {
       organizationId: organization.id,
-      bankAccountId: activeBankId,
+      bankAccountId,
       date,
       description,
       moneyIn,

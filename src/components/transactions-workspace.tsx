@@ -150,6 +150,17 @@ function readSidebarStatementIsCreditCard(): boolean {
   return localStorage.getItem("ledgerdesk-statement-type") === "Credit Card";
 }
 
+/** Match Statement type (Bank / Credit card) in the sidebar when adding a row. */
+function bankForSidebarStatementType(
+  banks: BankOption[],
+  activeBankId: string | null,
+): BankOption | null {
+  const wantType = readSidebarStatementIsCreditCard() ? "CREDIT_CARD" : "BANK";
+  const active = activeBankId ? banks.find((b) => b.id === activeBankId) : undefined;
+  if (active?.type === wantType) return active;
+  return banks.find((b) => b.type === wantType) ?? null;
+}
+
 function postingAccountLabel(tx: TxRow) {
   return tx.bankName ?? "—";
 }
@@ -1309,12 +1320,17 @@ export function TransactionsWorkspace({
   }
 
   function addRow() {
-    if (!activeBankId) {
-      toast.error("Select a bank first.");
+    const bank = bankForSidebarStatementType(banks, activeBankId);
+    if (!bank) {
+      toast.error(
+        readSidebarStatementIsCreditCard()
+          ? "No credit card account found. Add a card in the sidebar or choose Credit card under Statement type."
+          : "No bank account found. Add a bank in the sidebar or choose Bank under Statement type.",
+      );
       return;
     }
-    const bank = banks.find((b) => b.id === activeBankId);
     const fd = new FormData();
+    fd.set("bankAccountId", bank.id);
     fd.set("date", new Date().toISOString().slice(0, 10));
     fd.set("description", "New transaction");
     fd.set("moneyIn", "0");
@@ -1328,7 +1344,7 @@ export function TransactionsWorkspace({
       const r = result.row;
       const next: TxRow = {
         id: r.id,
-        bankAccountId: activeBankId,
+        bankAccountId: bank.id,
         date: r.date,
         description: r.description,
         moneyIn: r.moneyIn,
@@ -1342,8 +1358,8 @@ export function TransactionsWorkspace({
         salesTaxAmountOverride: null,
         provinceTaxAmountOverride: null,
         notes: null,
-        bankName: bank?.name ?? bankName ?? undefined,
-        bankType: bank?.type,
+        bankName: bank.name,
+        bankType: bank.type,
       };
       setRows((prev) => [next, ...prev]);
       toast.success("Row added");
@@ -1361,9 +1377,15 @@ export function TransactionsWorkspace({
                   type="button"
                   className="btn-converter btn-green"
                   id="addRowBtn2"
-                  disabled={pending || !activeBankId}
+                  disabled={
+                    pending || !bankForSidebarStatementType(banks, activeBankId)
+                  }
                   onClick={addRow}
-                  title={!activeBankId ? "Select a bank first" : "Add a blank transaction"}
+                  title={
+                    bankForSidebarStatementType(banks, activeBankId)
+                      ? "Add a blank transaction"
+                      : "Add a bank or credit card account matching Statement type"
+                  }
                 >
                   + Add Row
                 </button>

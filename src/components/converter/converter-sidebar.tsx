@@ -368,14 +368,6 @@ export function ConverterSidebar({
   }, [activeBankId]);
 
   useEffect(() => {
-    const bank = banks.find((b) => b.id === activeBankId);
-    if (!bank) return;
-    const st = bank.type === "CREDIT_CARD" ? "Credit Card" : "Bank";
-    setStatementType(st);
-    localStorage.setItem("ledgerdesk-statement-type", st);
-  }, [activeBankId, banks]);
-
-  useEffect(() => {
     const onCancel = () => setSelectedBankId(activeBankId ?? "");
     window.addEventListener(CONVERTER_EVENTS.activeBankChangeCancelled, onCancel);
     return () =>
@@ -502,7 +494,8 @@ export function ConverterSidebar({
                 <strong>Payments → Money In</strong>.
               </>
             )}{" "}
-            The selected type applies to the next imported statement.
+            The selected type applies to the next import and to <strong>+ Add Row</strong> on
+            Transactions.
           </p>
           <label className="mt-2 block text-[11px] font-semibold text-[#52697a]">
             Connected account
