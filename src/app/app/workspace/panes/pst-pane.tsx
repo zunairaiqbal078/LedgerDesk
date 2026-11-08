@@ -139,9 +139,9 @@ export default async function PstPane({
       ) : (
         <p className="gst-note">
           Includes all <strong>saved folder</strong> snapshots plus any <strong>unsaved</strong> rows
-          in Transactions — not only the folder currently loaded. PST/QST/RST uses codes classified
-          as <strong>PST</strong>. PST paid on purchases is shown for reference and is{" "}
-          <strong>not automatically deducted</strong> from PST payable.
+          in Transactions — not only the folder currently loaded.{" "}
+          <strong>PST Payable</strong> = PST Collected − PST Paid on Purchases (same idea as GST
+          payable). PST/QST/RST uses codes classified as <strong>PST</strong>.
         </p>
       )}
 

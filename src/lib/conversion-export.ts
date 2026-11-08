@@ -1,5 +1,7 @@
 /** Export helpers for converted / saved transaction rows (CSV, Excel, OFX, QBO). */
 
+import { exportAmountNumber, formatExportAmount } from "@/lib/table-export";
+
 export type ExportTransactionRow = {
   date: string;
   description: string;
@@ -14,6 +16,12 @@ export type ExportTransactionRow = {
   notes?: string | null;
   id?: string;
   bankType?: "BANK" | "CREDIT_CARD";
+  /** Connected bank / card name (Posting Account column). */
+  postingAccount?: string | null;
+  statementType?: "Bank" | "Credit Card" | string;
+  salesTaxAmount?: number;
+  provinceTaxAmount?: number;
+  netAmount?: number;
 };
 
 export type ExportFormat = "csv" | "excel" | "ofx" | "qbo";
@@ -33,39 +41,72 @@ function csvCell(value: string | number | null | undefined) {
   return raw;
 }
 
+function statementTypeForExport(row: ExportTransactionRow) {
+  if (row.statementType) return row.statementType;
+  return row.bankType === "CREDIT_CARD" ? "Credit Card" : "Bank";
+}
+
+function taxTreatmentLabel(mode: string | undefined) {
+  if (mode === "EXCLUSIVE") return "Exclusive";
+  if (mode === "KEEP") return "Keep";
+  return mode === "INCLUSIVE" ? "Inclusive" : mode ?? "";
+}
+
 function exportTableRows(rows: ExportTransactionRow[]) {
   return rows.map((row) => [
     row.date,
     row.description,
-    row.moneyIn,
-    row.moneyOut,
+    statementTypeForExport(row),
+    row.postingAccount ?? "",
+    exportAmountNumber(row.moneyIn),
+    exportAmountNumber(row.moneyOut),
     row.accountNumber ?? "",
     row.accountName ?? "",
     row.province ?? "",
     (row.taxCodes ?? []).join(";"),
     (row.provinceTaxCodes ?? []).join(";"),
-    row.taxMode ?? "",
+    taxTreatmentLabel(row.taxMode),
+    exportAmountNumber(row.salesTaxAmount ?? 0),
+    exportAmountNumber(row.provinceTaxAmount ?? 0),
+    exportAmountNumber(row.netAmount ?? 0),
     row.notes ?? "",
   ]);
+}
+
+/** CSV uses plain decimal strings for money columns (no $). */
+function exportTableRowsForCsv(rows: ExportTransactionRow[]) {
+  return exportTableRows(rows).map((cells) =>
+    cells.map((c, i) => {
+      if (typeof c === "number" && (i === 4 || i === 5 || i === 12 || i === 13 || i === 14)) {
+        return formatExportAmount(c);
+      }
+      return c;
+    }),
+  );
 }
 
 const EXPORT_HEADERS = [
   "Date",
   "Description",
+  "Bank / Credit Card",
+  "Posting Account",
   "Money In",
   "Money Out",
   "Account Number",
-  "Account Name",
+  "Category / Account",
   "Province",
-  "Sales Tax Codes",
-  "Province Tax Codes",
-  "Tax Mode",
+  "Sales Tax Code",
+  "PST Code",
+  "Tax Treatment",
+  "Sales Tax Amount",
+  "PST Amount",
+  "Net Amount",
   "Notes",
 ] as const;
 
 export function transactionsToCsv(rows: ExportTransactionRow[]) {
   const lines = [EXPORT_HEADERS.join(",")];
-  for (const cells of exportTableRows(rows)) {
+  for (const cells of exportTableRowsForCsv(rows)) {
     lines.push(cells.map(csvCell).join(","));
   }
   return lines.join("\n");

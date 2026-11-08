@@ -60,6 +60,20 @@ export async function requireSuperAdmin() {
 }
 
 export const getMembershipContext = cache(async function getMembershipContext(userId: string) {
+  try {
+    return await loadMembershipContext(userId);
+  } catch (error) {
+    if (isDynamicServerUsage(error)) {
+      throw error;
+    }
+    if (isPrismaConnectionError(error)) {
+      redirect("/db-unavailable");
+    }
+    throw error;
+  }
+});
+
+async function loadMembershipContext(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { globalRole: true },
@@ -165,7 +179,7 @@ export const getMembershipContext = cache(async function getMembershipContext(us
     activeBankId,
     activeBank: banks.find((b) => b.id === activeBankId) ?? null,
   };
-});
+}
 
 /** Firm-level team (admin+ on ACCOUNTANT_FIRM). Not used for solo client orgs. */
 export async function getFirmTeamAdminContext(userId: string) {
@@ -192,8 +206,18 @@ export async function requireOrgContext(minimumRole: OrgRole = "VIEWER") {
     redirect("/app?error=forbidden");
   }
 
-  const { ensureOrganizationDefaultsCached } = await import("@/lib/ensure-org-defaults");
-  await ensureOrganizationDefaultsCached(context.organization.id);
+  try {
+    const { ensureOrganizationDefaultsCached } = await import("@/lib/ensure-org-defaults");
+    await ensureOrganizationDefaultsCached(context.organization.id);
+  } catch (error) {
+    if (isDynamicServerUsage(error)) {
+      throw error;
+    }
+    if (isPrismaConnectionError(error)) {
+      redirect("/db-unavailable");
+    }
+    throw error;
+  }
 
   return { session, ...context };
 }

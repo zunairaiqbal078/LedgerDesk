@@ -1184,21 +1184,29 @@ export function TransactionsWorkspace({
       toast.error("No transactions to download.");
       return;
     }
-    const exportRows = source.map((tx) => ({
-      id: tx.id,
-      date: tx.date,
-      description: tx.description,
-      moneyIn: tx.moneyIn,
-      moneyOut: tx.moneyOut,
-      accountNumber: tx.accountNumber,
-      accountName: tx.accountName,
-      province: tx.province,
-      taxCodes: tx.taxCodes,
-      provinceTaxCodes: tx.provinceTaxCodes,
-      taxMode: tx.taxMode,
-      notes: tx.notes,
-      bankType: tx.bankType,
-    }));
+    const exportRows = source.map((tx) => {
+      const calc = calculateTransactionAmounts(transactionToCalcInput(tx), taxCatalog);
+      return {
+        id: tx.id,
+        date: tx.date,
+        description: tx.description,
+        moneyIn: tx.moneyIn,
+        moneyOut: tx.moneyOut,
+        accountNumber: tx.accountNumber,
+        accountName: tx.accountName,
+        province: tx.province,
+        taxCodes: tx.taxCodes,
+        provinceTaxCodes: tx.provinceTaxCodes,
+        taxMode: tx.taxMode,
+        notes: tx.notes,
+        bankType: tx.bankType,
+        postingAccount: tx.bankName ?? banks.find((b) => b.id === tx.bankAccountId)?.name ?? "",
+        statementType: tx.bankType === "CREDIT_CARD" ? "Credit Card" : "Bank",
+        salesTaxAmount: calc.salesTaxAmount,
+        provinceTaxAmount: calc.provinceTaxAmount,
+        netAmount: calc.netAmount,
+      };
+    });
     const filename = exportFilename(downloadFormat);
     const ofxOpts = {
       accountId: bankName ?? activeBankId ?? "ledgerdesk",

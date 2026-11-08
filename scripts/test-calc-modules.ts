@@ -334,10 +334,10 @@ async function main() {
   // ── 4. PST Calculation ───────────────────────────────────────────────
   console.log("\n=== 4. PST Calculation ===");
   const pst = calculatePstSummary(txs, CATALOG, period, "BC");
-  // Only t5 has PST: collected 7, taxable 100; payable = collected only
+  // Only t5 has PST: collected 7, taxable 100; payable = collected − paid
   failed += assertEq("PST taxable sales", pst.taxableSales, 100) ? 0 : 1;
   failed += assertEq("PST collected", pst.pstCollected, 7) ? 0 : 1;
-  failed += assertEq("PST payable (= collected)", pst.pstPayable, 7) ? 0 : 1;
+  failed += assertEq("PST payable (= collected − paid)", pst.pstPayable, 7) ? 0 : 1;
   failed += assert(
     "transfer excluded from PST",
     pst.lines.filter((l) => l.id === "t6" || l.id === "t7").every((l) => l.role === "excluded"),
@@ -407,6 +407,7 @@ async function main() {
       accountNumber: t.accountNumber,
       accountName: t.accountName,
       taxCodes: t.taxCodes,
+      provinceTaxCodes: t.provinceTaxCodes ?? [],
       taxMode: t.taxMode,
       transferMatchId: t.transferMatchId,
       bankAccountId: "bank-cheq",
@@ -884,8 +885,11 @@ async function main() {
     ];
     const p = calculatePstSummary(paid, CATALOG, mar, "BC");
     failed += assertEq("PST paid tracked", p.pstPaid, 7) ? 0 : 1;
-    failed += assertEq("PST payable ignores paid (HTML)", p.pstPayable, 7) ? 0 : 1;
-    failed += assert("pstPayable !== collected-paid", p.pstPayable !== round2(p.pstCollected - p.pstPaid))
+    failed += assertEq(
+      "PST payable = collected − paid",
+      p.pstPayable,
+      round2(p.pstCollected - p.pstPaid),
+    )
       ? 0
       : 1;
   }
@@ -1085,6 +1089,7 @@ async function main() {
           accountNumber: null,
           accountName: null,
           taxCodes: [],
+          provinceTaxCodes: [],
           taxMode: "INCLUSIVE",
           bankAccountId: "b1",
           bankName: "Cheq",
@@ -1099,6 +1104,7 @@ async function main() {
           accountNumber: "1000",
           accountName: "Transfer",
           taxCodes: [],
+          provinceTaxCodes: [],
           taxMode: "INCLUSIVE",
           transferMatchId: "tm",
           bankAccountId: "b1",
@@ -1122,6 +1128,7 @@ async function main() {
           accountNumber: "5200",
           accountName: "Supplies",
           taxCodes: ["GST5"],
+          provinceTaxCodes: [],
           taxMode: "INCLUSIVE",
           bankAccountId: "b1",
           bankName: "Cheq",
@@ -1155,6 +1162,7 @@ async function main() {
           accountNumber: "4000",
           accountName: "Sales",
           taxCodes: ["GST5"],
+          provinceTaxCodes: [],
           taxMode: "INCLUSIVE",
           bankAccountId: "b1",
           bankName: "Cheq",
@@ -1169,6 +1177,7 @@ async function main() {
           accountNumber: "4000",
           accountName: "Sales",
           taxCodes: ["GST5"],
+          provinceTaxCodes: [],
           taxMode: "INCLUSIVE",
           bankAccountId: "b1",
           bankName: "Cheq",
@@ -1518,7 +1527,11 @@ async function main() {
     failed += assert("PST wrong-side not collected", pstWrong.pstCollected === 0) ? 0 : 1;
     failed += assertEq("PST swap restores collected", pstOk.pstCollected, 7) ? 0 : 1;
     failed += assertEq("PST swap restores taxable", pstOk.taxableSales, 100) ? 0 : 1;
-    failed += assertEq("PST payable = collected after swap", pstOk.pstPayable, pstOk.pstCollected)
+    failed += assertEq(
+      "PST payable = collected − paid after swap",
+      pstOk.pstPayable,
+      round2(pstOk.pstCollected - pstOk.pstPaid),
+    )
       ? 0
       : 1;
 
@@ -1547,8 +1560,13 @@ async function main() {
     // moneyIn + hasPst without INCOME → falls to review (not paid) when not moneyOut
     failed += assertEq("PST wrong-side paid stays 0", pstExpW.pstPaid, 0) ? 0 : 1;
     failed += assertEq("PST swap restores paid", pstExpF.pstPaid, 7) ? 0 : 1;
-    // Payable still tracks collected only — unaffected by paid
-    failed += assertEq("PST payable ignores paid after swap", pstExpF.pstPayable, 0) ? 0 : 1;
+    failed += assertEq(
+      "PST payable = collected − paid after swap",
+      pstExpF.pstPayable,
+      round2(pstExpF.pstCollected - pstExpF.pstPaid),
+    )
+      ? 0
+      : 1;
 
     // ── E9.4 Bank recon: wrong sides break balance; swap fixes ──────
     {
@@ -1691,6 +1709,7 @@ async function main() {
         accountNumber: "5200",
         accountName: "Office Supplies",
         taxCodes: ["GST5"],
+        provinceTaxCodes: [] as string[],
         taxMode: "INCLUSIVE" as const,
         transferMatchId: null as string | null,
       };

@@ -416,7 +416,7 @@ function finalizePst(b: PstBucket): PstSummaryResult {
     nonTaxableSales: round2(b.nonTaxableSales),
     pstCollected: round2(b.pstCollected),
     pstPaid: round2(b.pstPaid),
-    pstPayable: round2(b.pstCollected),
+    pstPayable: round2(b.pstCollected - b.pstPaid),
     lines: b.lines,
   };
 }
