@@ -17,6 +17,10 @@ import {
 import { DualScrollArea } from "@/components/dual-scroll-area";
 import { parseImportFile } from "@/lib/import-parser";
 import { parseRulesFromImportMatrix } from "@/lib/rules-import";
+import {
+  filterProvinceTaxPickerOptions,
+  filterSalesTaxPickerOptions,
+} from "@/lib/tax-helpers";
 
 type StarterRule = {
   name: string;
@@ -125,11 +129,8 @@ export function RulesManager({
     [starterRules, existingNames],
   );
 
-  const gstOptions = useMemo(
-    () => taxCodes.filter((t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER"),
-    [taxCodes],
-  );
-  const pstOptions = useMemo(() => taxCodes.filter((t) => t.kind === "PST"), [taxCodes]);
+  const gstOptions = useMemo(() => filterSalesTaxPickerOptions(taxCodes), [taxCodes]);
+  const pstOptions = useMemo(() => filterProvinceTaxPickerOptions(taxCodes), [taxCodes]);
 
   const filtered = useMemo(() => {
     const terms = query

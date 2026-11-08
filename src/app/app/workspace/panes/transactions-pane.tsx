@@ -2,7 +2,11 @@ import { TransactionsWorkspace } from "@/components/transactions-workspace";
 import { prisma } from "@/lib/db";
 import { canEditTransactions } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
-import { transactionPatchSelect } from "@/lib/transaction-row-patch";
+import {
+  toTransactionRowPatch,
+  transactionPatchSelect,
+  type TransactionPatchRow,
+} from "@/lib/transaction-row-patch";
 
 export default async function TransactionsPane({
   loadedConversionId,
@@ -75,6 +79,8 @@ export default async function TransactionsPane({
         id: b.id,
         name: b.name,
         type: b.type,
+        glAccountNumber: b.glAccountNumber,
+        glAccountName: b.glAccountName,
       }))}
       accounts={accounts.map((a) => ({ number: a.number, name: a.name }))}
       taxCodes={taxCodes.map((t) => ({
@@ -85,27 +91,9 @@ export default async function TransactionsPane({
         province: t.province,
       }))}
       taxCatalog={taxCatalog}
-      transactions={transactions.map((tx) => ({
-        id: tx.id,
-        bankAccountId: tx.bankAccountId,
-        date: tx.date.toISOString().slice(0, 10),
-        description: tx.description,
-        moneyIn: Number(tx.moneyIn),
-        moneyOut: Number(tx.moneyOut),
-        accountNumber: tx.accountNumber,
-        accountName: tx.accountName,
-        province: tx.province,
-        taxCodes: tx.taxCodes,
-        provinceTaxCodes: tx.provinceTaxCodes,
-        taxMode: tx.taxMode,
-        salesTaxAmountOverride:
-          tx.salesTaxAmountOverride != null ? Number(tx.salesTaxAmountOverride) : null,
-        provinceTaxAmountOverride:
-          tx.provinceTaxAmountOverride != null ? Number(tx.provinceTaxAmountOverride) : null,
-        notes: tx.notes,
-        bankName: tx.bankAccount.name,
-        bankType: tx.bankAccount.type,
-      }))}
+      transactions={transactions.map((tx) =>
+        toTransactionRowPatch(tx as TransactionPatchRow),
+      )}
     />
   );
 }

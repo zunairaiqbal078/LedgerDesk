@@ -1,0 +1,3 @@
+﻿Date,Description,Account Number,Category,Money In,Money Out,Status,Cleared In,Cleared Out
+2026-11-01,CLIENT PAYMENT INV-1042,4000,Sales,2450.00,0.00,Open,,
+2026-11-05,MONTHLY BANK FEE,5400,Bank Charges,0.00,12.00,Cleared,,Y

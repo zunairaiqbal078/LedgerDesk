@@ -10,7 +10,13 @@ import { CANADIAN_PROVINCES, normalizeProvince } from "@/lib/canada-provinces";
 import { calculateTransactionAmounts } from "@/lib/transaction-math";
 import type { TaxCodeInfo } from "@/lib/tax-reports";
 
-type Bank = { id: string; name: string; type: "BANK" | "CREDIT_CARD" };
+type Bank = {
+  id: string;
+  name: string;
+  type: "BANK" | "CREDIT_CARD";
+  glAccountNumber?: string | null;
+  glAccountName?: string | null;
+};
 
 type TxRow = {
   id: string;
@@ -403,7 +409,16 @@ function EditableTransactionRowInner({
             onChange={(e) => {
               const v = e.target.value;
               setBankAccountId(v);
-              void persist({ bankAccountId: v });
+              const bank = banks.find((b) => b.id === v);
+              const patch: PersistOverrides = { bankAccountId: v };
+              const glNum = bank?.glAccountNumber?.trim();
+              if (glNum) {
+                patch.accountNumber = glNum;
+                patch.accountName = bank?.glAccountName?.trim() || bank?.name || "";
+                setAccountNumber(glNum);
+                setAccountName(patch.accountName ?? "");
+              }
+              void persist(patch);
             }}
           >
             {postingBanks.map((b) => (
@@ -486,7 +501,7 @@ function EditableTransactionRowInner({
               void persist({ accountNumber: num, accountName: ac ? name : num ? accountName : "" });
             }}
           >
-            <option value="">—</option>
+            <option value="">None</option>
             {accounts.map((a) => (
               <option key={a.number} value={a.number}>
                 {a.number}
@@ -514,7 +529,7 @@ function EditableTransactionRowInner({
               });
             }}
           >
-            <option value="">—</option>
+            <option value="">None</option>
             {accounts.map((a) => (
               <option key={`${a.number}-${a.name}`} value={a.name}>
                 {a.name}

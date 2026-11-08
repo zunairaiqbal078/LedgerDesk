@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_CHART_ACCOUNTS,
+  STARTER_CHART_ACCOUNTS,
   DEFAULT_RULES,
   DEFAULT_TAX_CODES,
   seedOrganizationDefaults,
@@ -223,7 +224,7 @@ export async function fillMissingStarterChartAndTaxes(
     select: { id: true, number: true, isSystem: true, name: true },
   });
   const accountByNumber = new Map(existingAccounts.map((a) => [a.number, a]));
-  const missingAccounts = DEFAULT_CHART_ACCOUNTS.filter((a) => !accountByNumber.has(a.number));
+  const missingAccounts = STARTER_CHART_ACCOUNTS.filter((a) => !accountByNumber.has(a.number));
   if (missingAccounts.length) {
     const result = await client.chartAccount.createMany({
       data: missingAccounts.map((account) => ({

@@ -16,6 +16,10 @@ import {
 import { DualScrollArea } from "@/components/dual-scroll-area";
 import { parseAccountsFromImportMatrix } from "@/lib/accounts-import";
 import { parseImportFile } from "@/lib/import-parser";
+import {
+  filterProvinceTaxPickerOptions,
+  filterSalesTaxPickerOptions,
+} from "@/lib/tax-helpers";
 
 type Account = {
   id: string;
@@ -92,11 +96,8 @@ export function AccountsManager({
     [starterAccounts, existingNumbers],
   );
 
-  const gstOptions = useMemo(
-    () => taxCodes.filter((t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER"),
-    [taxCodes],
-  );
-  const pstOptions = useMemo(() => taxCodes.filter((t) => t.kind === "PST"), [taxCodes]);
+  const gstOptions = useMemo(() => filterSalesTaxPickerOptions(taxCodes), [taxCodes]);
+  const pstOptions = useMemo(() => filterProvinceTaxPickerOptions(taxCodes), [taxCodes]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { generateAutomaticEntries } from "@/lib/general-entries";
+import {
+  loadTransactionsForGeneralEntries,
+  parseGeCustomDateEnd,
+  parseGeCustomDateStart,
+} from "@/lib/general-entries-sources";
 import { canEditTransactions } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
 import {
@@ -333,17 +338,11 @@ export async function generateGeneralEntriesAction(
 
   const customStartRaw = String(formData.get("customStartDate") ?? "").trim();
   const customEndRaw = String(formData.get("customEndDate") ?? "").trim();
-  const customStart = customStartRaw ? new Date(customStartRaw) : null;
-  const customEnd = customEndRaw ? new Date(customEndRaw) : null;
+  const customStart = customStartRaw ? parseGeCustomDateStart(customStartRaw) : null;
+  const customEnd = customEndRaw ? parseGeCustomDateEnd(customEndRaw) : null;
 
   if (periodType === "CUSTOM") {
-    if (
-      !customStart ||
-      !customEnd ||
-      Number.isNaN(customStart.getTime()) ||
-      Number.isNaN(customEnd.getTime()) ||
-      customStart > customEnd
-    ) {
+    if (!customStart || !customEnd || customStart.getTime() > customEnd.getTime()) {
       return {
         ok: false,
         error: "Choose a valid Custom Start Date and Custom End Date before generating.",
@@ -380,33 +379,13 @@ export async function generateGeneralEntriesAction(
     },
   });
 
-  const [transactions, taxCodes] = await Promise.all([
-    prisma.transaction.findMany({
-      where: { organizationId: organization.id },
-      include: { bankAccount: true },
-      orderBy: { date: "asc" },
-    }),
+  const [geTransactions, taxCodes] = await Promise.all([
+    loadTransactionsForGeneralEntries(prisma, organization.id),
     prisma.taxCode.findMany({ where: { organizationId: organization.id } }),
   ]);
 
   const rateMap = new Map(taxCodes.map((t) => [t.code, Number(t.rate)]));
-  const generated = generateAutomaticEntries(
-    transactions.map((tx) => ({
-      id: tx.id,
-      date: tx.date,
-      description: tx.description,
-      moneyIn: Number(tx.moneyIn),
-      moneyOut: Number(tx.moneyOut),
-      accountNumber: tx.accountNumber,
-      accountName: tx.accountName,
-      taxCodes: tx.taxCodes,
-      taxMode: tx.taxMode,
-      transferMatchId: tx.transferMatchId,
-      bankAccountId: tx.bankAccountId,
-      bankName: tx.bankAccount.name,
-      bankType: tx.bankAccount.type,
-    })),
-    {
+  const generated = generateAutomaticEntries(geTransactions, {
       periodType,
       taxRateByCode: rateMap,
       customStart,
@@ -448,7 +427,11 @@ export async function generateGeneralEntriesAction(
       actorId: session.user.id,
       action: "general_entries.generated",
       entityType: "GeneralEntry",
-      metadata: { count: generated.length, periodType },
+      metadata: {
+        count: generated.length,
+        periodType,
+        transactionSources: geTransactions.length,
+      },
     },
   });
 
@@ -456,7 +439,7 @@ export async function generateGeneralEntriesAction(
   return {
     ok: true,
     count: generated.length,
-    message: `Generated ${generated.length} automatic entries.`,
+    message: `Generated ${generated.length} automatic ${generated.length === 1 ? "entry" : "entries"} from ${geTransactions.length} transaction${geTransactions.length === 1 ? "" : "s"} (workspace + saved folders).`,
   };
 }
 
@@ -591,5 +574,92 @@ export async function bulkDeleteReconciliationsAction(
     ok: true,
     count: result.count,
     message: `Deleted ${result.count} reconciliation record${result.count === 1 ? "" : "s"}.`,
+  };
+}
+
+export type ReconTxPatch = {
+  id: string;
+  date: string;
+  description: string;
+  moneyIn: number;
+  moneyOut: number;
+  accountNumber: string | null;
+  accountName: string | null;
+  reconciledIn: boolean;
+  reconciledOut: boolean;
+};
+
+/** Create a blank transaction on the active bank for Reconciliation “Add row”. */
+export async function addReconciliationTransactionAction(
+  formData: FormData,
+): Promise<ActionResult & { id?: string; row?: ReconTxPatch }> {
+  const { organization, activeBankId, role } = await requireOrgContext("BOOKKEEPER");
+  if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
+  if (!activeBankId) return { ok: false, error: "Select a bank first." };
+
+  const bankOk = await prisma.bankAccount.count({
+    where: { id: activeBankId, organizationId: organization.id },
+  });
+  if (!bankOk) return { ok: false, error: "Bank not found." };
+
+  const dateRaw = String(formData.get("date") ?? "").trim();
+  const dateIso =
+    dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)
+      ? dateRaw
+      : new Date().toISOString().slice(0, 10);
+  const date = new Date(`${dateIso}T12:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return { ok: false, error: "Invalid date." };
+
+  const moneyIn = Math.max(0, Number(formData.get("moneyIn")) || 0);
+  const moneyOut = Math.max(0, Number(formData.get("moneyOut")) || 0);
+  const description = String(formData.get("description") ?? "").trim() || "New transaction";
+  const accountNumber = String(formData.get("accountNumber") ?? "").trim() || null;
+  const accountName = String(formData.get("accountName") ?? "").trim() || null;
+
+  const created = await prisma.transaction.create({
+    data: {
+      organizationId: organization.id,
+      bankAccountId: activeBankId,
+      date,
+      description,
+      moneyIn,
+      moneyOut,
+      accountNumber,
+      accountName,
+      taxCodes: [],
+      provinceTaxCodes: [],
+      taxMode: "INCLUSIVE",
+      reconciledIn: false,
+      reconciledOut: false,
+    },
+    select: {
+      id: true,
+      date: true,
+      description: true,
+      moneyIn: true,
+      moneyOut: true,
+      accountNumber: true,
+      accountName: true,
+      reconciledIn: true,
+      reconciledOut: true,
+    },
+  });
+
+  // No revalidatePath — client inserts the row locally for instant UI.
+  return {
+    ok: true,
+    id: created.id,
+    message: "Row added.",
+    row: {
+      id: created.id,
+      date: created.date.toISOString().slice(0, 10),
+      description: created.description,
+      moneyIn: Number(created.moneyIn),
+      moneyOut: Number(created.moneyOut),
+      accountNumber: created.accountNumber,
+      accountName: created.accountName,
+      reconciledIn: created.reconciledIn,
+      reconciledOut: created.reconciledOut,
+    },
   };
 }

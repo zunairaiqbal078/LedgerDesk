@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useMemo, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
 import {
   bulkDeleteGeneralEntriesAction,
   createManualGeneralEntryAction,
@@ -13,6 +12,16 @@ import {
 } from "@/app/actions/accounting";
 import { DualScrollArea } from "@/components/dual-scroll-area";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
+import {
+  downloadCsv,
+  downloadExcelAoa,
+  exportAmountNumber,
+  fitExportText,
+  formatExportAmount,
+  rowsToCsv,
+  sanitizeExportText,
+  shortenPeriodLabel,
+} from "@/lib/table-export";
 import { jsPDF } from "jspdf";
 
 type Entry = {
@@ -43,6 +52,7 @@ type ManualLine = {
   credit: string;
 };
 
+/** On-screen display only — exports use formatExportAmount (no $). */
 function money(n: number) {
   return `$${n.toLocaleString("en-CA", {
     minimumFractionDigits: 2,
@@ -58,15 +68,6 @@ function blankManualLine(): ManualLine {
     debit: "",
     credit: "",
   };
-}
-
-function downloadBlob(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 export function GeneralEntriesWorkspace({
@@ -218,20 +219,30 @@ export function GeneralEntriesWorkspace({
   }
 
   function flatExportRows() {
-    const rows: Array<Record<string, string | number>> = [];
+    const rows: Array<{
+      Entry: string;
+      Period: string;
+      Date: string;
+      Source: string;
+      AccountNumber: string;
+      Account: string;
+      Memo: string;
+      Debit: number;
+      Credit: number;
+    }> = [];
     sortedEntries.forEach((entry, ei) => {
       const je = `JE ${String(ei + 1).padStart(3, "0")}`;
       entry.lines.forEach((line) => {
         rows.push({
           Entry: je,
-          Period: entry.periodLabel || "",
+          Period: shortenPeriodLabel(entry.periodLabel || ""),
           Date: entry.date || "",
           Source: entry.source === "AUTOMATIC" ? "Automatic" : "Manual",
-          AccountNumber: line.accountNumber || "",
-          Account: line.accountName || "",
-          Memo: line.memo || entry.memo || "",
-          Debit: Number(line.debit) || 0,
-          Credit: Number(line.credit) || 0,
+          AccountNumber: sanitizeExportText(line.accountNumber || ""),
+          Account: sanitizeExportText(line.accountName || ""),
+          Memo: sanitizeExportText(line.memo || entry.memo || ""),
+          Debit: exportAmountNumber(line.debit),
+          Credit: exportAmountNumber(line.credit),
         });
       });
     });
@@ -244,15 +255,32 @@ export function GeneralEntriesWorkspace({
       toast.message("There are no general entries to export.");
       return;
     }
-    const heads = Object.keys(rows[0]!);
-    const esc = (v: string | number) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [heads.map(esc).join(","), ...rows.map((r) => heads.map((h) => esc(r[h]!)).join(","))].join(
-      "\r\n",
+    const headers = [
+      "Entry",
+      "Period",
+      "Date",
+      "Source",
+      "Account Number",
+      "Account",
+      "Memo",
+      "Debit",
+      "Credit",
+    ];
+    const csv = rowsToCsv(
+      headers,
+      rows.map((r) => [
+        r.Entry,
+        r.Period,
+        r.Date,
+        r.Source,
+        r.AccountNumber,
+        r.Account,
+        r.Memo,
+        formatExportAmount(r.Debit),
+        formatExportAmount(r.Credit),
+      ]),
     );
-    downloadBlob(
-      "general_entries.csv",
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    );
+    downloadCsv("general_entries.csv", csv);
     toast.success("CSV downloaded.");
   }
 
@@ -262,10 +290,30 @@ export function GeneralEntriesWorkspace({
       toast.message("There are no general entries to export.");
       return;
     }
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "General Entries");
-    XLSX.writeFile(wb, "general_entries.xlsx");
+    downloadExcelAoa("general_entries.xlsx", "General Entries", [
+      [
+        "Entry",
+        "Period",
+        "Date",
+        "Source",
+        "Account Number",
+        "Account",
+        "Memo",
+        "Debit",
+        "Credit",
+      ],
+      ...rows.map((r) => [
+        r.Entry,
+        r.Period,
+        r.Date,
+        r.Source,
+        r.AccountNumber,
+        r.Account,
+        r.Memo,
+        r.Debit,
+        r.Credit,
+      ]),
+    ]);
     toast.success("Excel downloaded.");
   }
 
@@ -277,46 +325,70 @@ export function GeneralEntriesWorkspace({
     }
     try {
       const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
-      const margin = 32;
+      const margin = 28;
       const pageW = doc.internal.pageSize.getWidth();
       const pageH = doc.internal.pageSize.getHeight();
+      const contentW = pageW - margin * 2;
       let y = margin;
+
+      const rangeLabel =
+        customStartDate && customEndDate
+          ? `${customStartDate} to ${customEndDate}`
+          : "All generated entries";
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
       doc.text("General Entries", margin, y);
-      y += 16;
+      y += 18;
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      const rangeLabel =
-        customStartDate && customEndDate
-          ? `${customStartDate} → ${customEndDate}`
-          : "All generated entries";
+      doc.setFontSize(9);
+      // Two aligned meta rows (left / right)
       doc.text(`Range: ${rangeLabel}`, margin, y);
-      doc.text(`Entries: ${sortedEntries.length}`, 360, y);
-      y += 14;
-      doc.text(`Total Debits: ${money(totalDebit)}`, margin, y);
-      doc.text(`Total Credits: ${money(totalCredit)}`, 360, y);
-      y += 20;
+      doc.text(`Entries: ${sortedEntries.length}`, pageW - margin, y, { align: "right" });
+      y += 13;
+      doc.text(`Total Debits: ${formatExportAmount(totalDebit)}`, margin, y);
+      doc.text(`Total Credits: ${formatExportAmount(totalCredit)}`, pageW - margin, y, {
+        align: "right",
+      });
+      y += 16;
 
-      const cols = [
-        { label: "Entry", x: margin },
-        { label: "Date", x: margin + 50 },
-        { label: "Period", x: margin + 110 },
-        { label: "Source", x: margin + 200 },
-        { label: "Account", x: margin + 270 },
-        { label: "Memo", x: margin + 430 },
-        { label: "Debit", x: pageW - margin - 110 },
-        { label: "Credit", x: pageW - margin - 50 },
-      ];
+      // Fixed columns — no Period (already in Range header). Prevents overlap.
+      const gap = 8;
+      const col = {
+        entry: { x: margin, w: 42 },
+        date: { x: 0, w: 62 },
+        source: { x: 0, w: 52 },
+        account: { x: 0, w: 168 },
+        memo: { x: 0, w: 210 },
+        debit: { x: 0, w: 70 },
+        credit: { x: 0, w: 70 },
+      };
+      col.date.x = col.entry.x + col.entry.w + gap;
+      col.source.x = col.date.x + col.date.w + gap;
+      col.account.x = col.source.x + col.source.w + gap;
+      col.memo.x = col.account.x + col.account.w + gap;
+      col.credit.x = margin + contentW - col.credit.w;
+      col.debit.x = col.credit.x - gap - col.debit.w;
+
+      const measure = (t: string) => doc.getTextWidth(t);
+      const clip = (t: string, w: number) => fitExportText(t, w, measure);
 
       const drawHeader = () => {
         doc.setFillColor(238, 244, 248);
-        doc.rect(margin, y - 10, pageW - margin * 2, 16, "F");
+        doc.rect(margin, y - 10, contentW, 16, "F");
         doc.setFont("helvetica", "bold");
         doc.setFontSize(8);
-        cols.forEach((c) => doc.text(c.label, c.x, y));
+        doc.text("Entry", col.entry.x, y);
+        doc.text("Date", col.date.x, y);
+        doc.text("Source", col.source.x, y);
+        doc.text("Account", col.account.x, y);
+        doc.text("Memo", col.memo.x, y);
+        doc.text("Debit", col.debit.x + col.debit.w, y, { align: "right" });
+        doc.text("Credit", col.credit.x + col.credit.w, y, { align: "right" });
         y += 12;
+        doc.setDrawColor(210, 220, 228);
+        doc.setLineWidth(0.4);
+        doc.line(margin, y - 4, margin + contentW, y - 4);
       };
 
       drawHeader();
@@ -324,24 +396,33 @@ export function GeneralEntriesWorkspace({
       doc.setFontSize(8);
 
       for (const row of rows) {
-        if (y > pageH - 40) {
+        if (y > pageH - 36) {
           doc.addPage();
           y = margin;
           drawHeader();
           doc.setFont("helvetica", "normal");
           doc.setFontSize(8);
         }
-        const account = [row.AccountNumber, row.Account].filter(Boolean).join(" — ");
-        const memo = String(row.Memo || "").slice(0, 42);
-        doc.text(String(row.Entry), cols[0]!.x, y);
-        doc.text(String(row.Date), cols[1]!.x, y);
-        doc.text(String(row.Period || "—").slice(0, 14), cols[2]!.x, y);
-        doc.text(String(row.Source), cols[3]!.x, y);
-        doc.text(account.slice(0, 28), cols[4]!.x, y);
-        doc.text(memo, cols[5]!.x, y);
-        doc.text(money(Number(row.Debit) || 0), cols[6]!.x, y, { align: "right" });
-        doc.text(money(Number(row.Credit) || 0), cols[7]!.x, y, { align: "right" });
-        y += 12;
+        const account = clip(
+          [row.AccountNumber, row.Account].filter(Boolean).join(" - "),
+          col.account.w,
+        );
+        // Memo must end before Debit column
+        const memoMax = Math.max(24, col.debit.x - col.memo.x - gap);
+        const memo = clip(row.Memo, memoMax);
+
+        doc.text(clip(String(row.Entry), col.entry.w), col.entry.x, y);
+        doc.text(clip(String(row.Date), col.date.w), col.date.x, y);
+        doc.text(clip(String(row.Source), col.source.w), col.source.x, y);
+        doc.text(account, col.account.x, y);
+        doc.text(memo, col.memo.x, y);
+        doc.text(formatExportAmount(row.Debit), col.debit.x + col.debit.w, y, {
+          align: "right",
+        });
+        doc.text(formatExportAmount(row.Credit), col.credit.x + col.credit.w, y, {
+          align: "right",
+        });
+        y += 11;
       }
 
       const rangePart =
@@ -577,7 +658,9 @@ export function GeneralEntriesWorkspace({
             General Entries
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Generate balanced journals from categorized transactions, or create manual entries.
+            Generate balanced journals from all categorized transactions in the workspace and in
+            saved folders (every connected account), filtered by your date range. Calculations are
+            unchanged — only the transaction sources are combined.
           </p>
         </div>
         <div className="toolbar-left flex flex-wrap gap-2">
@@ -827,7 +910,9 @@ export function GeneralEntriesWorkspace({
                       <td>{isFirst ? <strong>{jeLabel}</strong> : null}</td>
                       <td className="ge-period">
                         {isFirst
-                          ? entry.periodLabel || (entry.source === "MANUAL" ? "Manual" : "—")
+                          ? shortenPeriodLabel(
+                              entry.periodLabel || (entry.source === "MANUAL" ? "Manual" : "-"),
+                            )
                           : null}
                       </td>
                       <td>{isFirst ? entry.date : null}</td>

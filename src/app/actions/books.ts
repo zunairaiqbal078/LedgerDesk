@@ -939,6 +939,7 @@ export async function importTransactionsAction(
       bankAccountId?: string;
       newBankName?: string;
       newBankType?: "BANK" | "CREDIT_CARD";
+      newBankGlNumber?: string;
     };
 
     try {
@@ -979,14 +980,34 @@ export async function importTransactionsAction(
         : null;
 
     if (!bank && payload.newBankName?.trim()) {
+      const glNumber = payload.newBankGlNumber?.trim() || null;
+      const bankName = payload.newBankName.trim();
       bank = await prisma.bankAccount.create({
         data: {
           organizationId: organization.id,
-          name: payload.newBankName.trim(),
+          name: bankName,
           type: payload.newBankType === "CREDIT_CARD" ? "CREDIT_CARD" : "BANK",
           currency: "CAD",
+          glAccountNumber: glNumber,
+          glAccountName: glNumber ? bankName : null,
         },
       });
+      if (glNumber) {
+        const existingChart = await prisma.chartAccount.findFirst({
+          where: { organizationId: organization.id, number: glNumber },
+        });
+        if (!existingChart) {
+          await prisma.chartAccount.create({
+            data: {
+              organizationId: organization.id,
+              number: glNumber,
+              name: bankName,
+              type: payload.newBankType === "CREDIT_CARD" ? "LIABILITY" : "ASSET",
+            },
+          });
+          revalidatePath("/app/accounts");
+        }
+      }
     }
 
     if (!bank && activeBankId) {
@@ -1471,7 +1492,7 @@ export async function deleteAllTransactionsAction(): Promise<ActionResult> {
 }
 
 export async function deleteTransactionsAction(formData: FormData): Promise<ActionResult> {
-  const { organization, activeBankId, role } = await requireOrgContext("BOOKKEEPER");
+  const { organization, role } = await requireOrgContext("BOOKKEEPER");
   if (!canEditTransactions(role)) return { ok: false, error: "Forbidden" };
   const ids = String(formData.get("ids") ?? "")
     .split(",")
@@ -1479,13 +1500,17 @@ export async function deleteTransactionsAction(formData: FormData): Promise<Acti
     .filter(Boolean);
   if (!ids.length) return { ok: false, error: "Nothing selected." };
 
+  // Delete by id + org only — don't require activeBankId (empty/new rows and
+  // multi-bank tables must still delete when the user explicitly selected them).
   const result = await prisma.transaction.deleteMany({
     where: {
       id: { in: ids },
       organizationId: organization.id,
-      ...(activeBankId ? { bankAccountId: activeBankId } : {}),
     },
   });
+  if (!result.count) {
+    return { ok: false, error: "No matching transactions to delete." };
+  }
   revalidatePath("/app");
   return { ok: true, count: result.count, message: `Deleted ${result.count} transactions.` };
 }

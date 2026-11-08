@@ -4,6 +4,10 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { updateTransactionCategoryAction, type ActionResult } from "@/app/actions/saves";
 import { calculateTransactionAmounts } from "@/lib/transaction-math";
+import {
+  filterProvinceTaxPickerOptions,
+  filterSalesTaxPickerOptions,
+} from "@/lib/tax-helpers";
 import type { TaxCodeInfo } from "@/lib/tax-reports";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
 
@@ -44,12 +48,9 @@ export function EditTransactionDialog({
   const [notes, setNotes] = useState(tx.notes ?? "");
   const [description, setDescription] = useState(tx.description);
 
-  const salesOptions = useMemo(
-    () => taxCatalog.filter((t) => t.kind === "GST_HST" || t.kind === "NONE"),
-    [taxCatalog],
-  );
+  const salesOptions = useMemo(() => filterSalesTaxPickerOptions(taxCatalog), [taxCatalog]);
   const provinceOptions = useMemo(
-    () => taxCatalog.filter((t) => t.kind === "PST"),
+    () => filterProvinceTaxPickerOptions(taxCatalog),
     [taxCatalog],
   );
 
@@ -101,7 +102,7 @@ export function EditTransactionDialog({
               value={account}
               onChange={(e) => setAccount(e.target.value)}
             >
-              <option value="">— Uncategorized —</option>
+              <option value="">None</option>
               {accounts.map((a) => (
                 <option key={a.number} value={`${a.number}||${a.name}`}>
                   {a.number} · {a.name}

@@ -9,7 +9,7 @@ export default async function ReconciliationPane() {
   const reconSince = new Date();
   reconSince.setUTCFullYear(reconSince.getUTCFullYear() - 3);
 
-  const [transactions, history] = await Promise.all([
+  const [transactions, history, accounts] = await Promise.all([
     activeBank
       ? prisma.transaction.findMany({
           where: {
@@ -25,6 +25,7 @@ export default async function ReconciliationPane() {
             description: true,
             moneyIn: true,
             moneyOut: true,
+            accountNumber: true,
             accountName: true,
             reconciledIn: true,
             reconciledOut: true,
@@ -41,6 +42,11 @@ export default async function ReconciliationPane() {
           take: 30,
         })
       : Promise.resolve([]),
+    prisma.chartAccount.findMany({
+      where: { organizationId: organization.id },
+      orderBy: { number: "asc" },
+      select: { number: true, name: true },
+    }),
   ]);
 
   const lastFinished = history.find((h) => h.status === "FINISHED");
@@ -52,12 +58,14 @@ export default async function ReconciliationPane() {
       bankName={activeBank?.name ?? null}
       bankType={activeBank?.type ?? null}
       suggestedOpening={suggestedOpening}
+      accounts={accounts}
       transactions={transactions.map((tx) => ({
         id: tx.id,
         date: tx.date.toISOString().slice(0, 10),
         description: tx.description,
         moneyIn: Number(tx.moneyIn),
         moneyOut: Number(tx.moneyOut),
+        accountNumber: tx.accountNumber,
         accountName: tx.accountName,
         reconciledIn: tx.reconciledIn,
         reconciledOut: tx.reconciledOut,

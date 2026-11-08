@@ -20,6 +20,8 @@
     "test:pdf": "tsx scripts/test-pdf-ai.ts",
     "test:pdf:ai": "tsx scripts/test-pdf-ai.ts --ai",
     "test:calcs": "tsx scripts/test-calc-modules.ts",
+    "test:ge-folders": "tsx scripts/test-ge-multi-folder.ts",
+    "test:exports": "tsx scripts/test-export-formats.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {

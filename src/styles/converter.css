@@ -532,8 +532,22 @@
   cursor: pointer;
 }
 
-.converter-app .row-actions {
+.converter-app td.row-actions {
   white-space: nowrap;
+  position: sticky;
+  right: 0;
+  background: #fff;
+  z-index: 1;
+  box-shadow: -6px 0 8px -6px rgba(15, 40, 60, 0.18);
+}
+
+.converter-app th.row-actions {
+  white-space: nowrap;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: #edf4f8;
+  box-shadow: -6px 0 8px -6px rgba(15, 40, 60, 0.18);
 }
 
 .converter-app .btn-converter.btn-sm {
@@ -1226,7 +1240,7 @@
 
 .converter-app .recon-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 960px;
   border-collapse: collapse;
   font-size: 13.5px;
   text-align: left;
@@ -1248,6 +1262,80 @@
   padding: 8px 12px;
   border-bottom: 1px solid #edf1f4;
   vertical-align: middle;
+}
+
+/* Money In / Out: checkbox column fixed left, amount right — stays aligned across rows */
+.converter-app .recon-table .recon-money {
+  width: 150px;
+  min-width: 140px;
+}
+
+.converter-app .recon-table .recon-money-cell {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+}
+
+.converter-app .recon-table .recon-money-cell > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  justify-self: start;
+}
+
+.converter-app .recon-table .recon-money-cell .recon-money-amount,
+.converter-app .recon-table .recon-money-cell input[type="number"] {
+  justify-self: stretch;
+  text-align: right;
+  width: 100%;
+  min-width: 0;
+}
+
+.converter-app .recon-table .recon-money-head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+}
+
+.converter-app .recon-table .recon-money-head > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  justify-self: start;
+}
+
+.converter-app .recon-table .recon-money-head span {
+  text-align: right;
+}
+
+.converter-app .recon-table input[type="date"],
+.converter-app .recon-table input[type="text"],
+.converter-app .recon-table input[type="number"],
+.converter-app .recon-table select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #d5dee6;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
+
+.converter-app .recon-table input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.converter-app .recon-table td.col-date {
+  width: 132px;
+}
+
+.converter-app .recon-table td.col-category {
+  min-width: 140px;
 }
 
 .converter-app .ge-table th {

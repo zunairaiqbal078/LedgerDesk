@@ -127,6 +127,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         name: b.name,
         type: b.type as "BANK" | "CREDIT_CARD",
         mask: b.mask,
+        glAccountNumber: b.glAccountNumber,
+        glAccountName: b.glAccountName,
       }))}
       activeBankId={context.activeBankId}
       folders={folders}

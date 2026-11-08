@@ -80,8 +80,10 @@ export function generateAutomaticEntries(
       const start = options.customStart;
       const end = options.customEnd;
       if (!start || !end) continue;
-      const t = tx.date.getTime();
-      if (t < start.getTime() || t > end.getTime()) continue;
+      const dayUtc = (d: Date) =>
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      const t = dayUtc(tx.date);
+      if (t < dayUtc(start) || t > dayUtc(end)) continue;
       const key = `C:${start.toISOString().slice(0, 10)}:${end.toISOString().slice(0, 10)}`;
       const list = groups.get(key) ?? [];
       list.push(tx);
@@ -100,7 +102,7 @@ export function generateAutomaticEntries(
   for (const [rawLabel, rows] of groups) {
     const label =
       options.periodType === "CUSTOM" && rawLabel.startsWith("C:")
-        ? `Custom — ${rawLabel.slice(2).replace(":", " to ")}`
+        ? rawLabel.slice(2).replace(":", " to ")
         : rawLabel;
     // Aggregate by category + bank
     type Agg = {

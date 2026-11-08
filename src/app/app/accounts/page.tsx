@@ -1,7 +1,7 @@
 import { AccountsManager } from "@/components/accounts-manager";
 import { prisma } from "@/lib/db";
 import { getOrganizationStarterChartVisible } from "@/lib/org-meta";
-import { DEFAULT_CHART_ACCOUNTS } from "@/lib/org-defaults";
+import { STARTER_CHART_ACCOUNTS } from "@/lib/org-defaults";
 import { hasMinOrgRole } from "@/lib/permissions";
 import { requireOrgContext } from "@/lib/session";
 
@@ -36,7 +36,7 @@ export default async function AccountsPage() {
         isSystem: account.isSystem,
       }))}
       starterChartVisible={starterChartVisible}
-      starterAccounts={DEFAULT_CHART_ACCOUNTS.map((a) => ({
+      starterAccounts={STARTER_CHART_ACCOUNTS.map((a) => ({
         number: a.number,
         name: a.name,
         type: a.type,

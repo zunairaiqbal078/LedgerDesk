@@ -15,6 +15,7 @@ import {
   importTransactionsAction,
   swapDebitCreditAction,
 } from "@/app/actions/books";
+import { addReconciliationTransactionAction } from "@/app/actions/accounting";
 import {
   clearLoadedConversionContext,
   downloadCsvFile,
@@ -62,6 +63,10 @@ import {
   summarizeTransactions,
   transactionToCalcInput,
 } from "@/lib/transaction-math";
+import {
+  filterProvinceTaxPickerOptions,
+  filterSalesTaxPickerOptions,
+} from "@/lib/tax-helpers";
 import type { TaxCodeInfo } from "@/lib/tax-reports";
 import { parseBankXml } from "@/lib/xml-parser";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
@@ -96,7 +101,13 @@ type TaxOption = {
   kind?: string;
   province?: string | null;
 };
-type BankOption = { id: string; name: string; type: "BANK" | "CREDIT_CARD" };
+type BankOption = {
+  id: string;
+  name: string;
+  type: "BANK" | "CREDIT_CARD";
+  glAccountNumber?: string | null;
+  glAccountName?: string | null;
+};
 type FolderOption = { id: string; name: string };
 
 type PendingRows = Array<{
@@ -261,6 +272,7 @@ export function TransactionsWorkspace({
   );
   const [importBankId, setImportBankId] = useState(activeBankId ?? banks[0]?.id ?? "");
   const [newBankName, setNewBankName] = useState("");
+  const [newBankGlNumber, setNewBankGlNumber] = useState("");
   const [newBankType, setNewBankType] = useState<"BANK" | "CREDIT_CARD">("BANK");
   /** Manual flip on import preview when Debit/Credit sides were imported backwards. */
   const [previewSwapSides, setPreviewSwapSides] = useState(false);
@@ -288,14 +300,11 @@ export function TransactionsWorkspace({
   }, []);
 
   const salesTaxOptions = useMemo(
-    () =>
-      taxCodes.filter(
-        (t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER",
-      ),
+    () => filterSalesTaxPickerOptions(taxCodes),
     [taxCodes],
   );
   const provinceTaxOptions = useMemo(
-    () => taxCodes.filter((t) => t.kind === "PST"),
+    () => filterProvinceTaxPickerOptions(taxCodes),
     [taxCodes],
   );
   const provinceTaxByProvince = useMemo(() => {
@@ -423,6 +432,7 @@ export function TransactionsWorkspace({
     setImportBankMode(banks.length ? "existing" : "new");
     setImportBankId(activeBankId ?? banks[0]?.id ?? "");
     setNewBankName("");
+    setNewBankGlNumber("");
     const preferCc =
       readSidebarStatementIsCreditCard() || bankHint?.statementType === "CREDIT_CARD";
     const preferredType = preferCc ? "CREDIT_CARD" : "BANK";
@@ -985,6 +995,7 @@ export function TransactionsWorkspace({
       return {
         newBankName: newBankName.trim() || "Imported Statements",
         newBankType,
+        newBankGlNumber: newBankGlNumber.trim() || undefined,
       };
     }
     return {
@@ -1116,18 +1127,24 @@ export function TransactionsWorkspace({
   const taxPickerOptions = taxPickerMode === "pst" ? provinceTaxOptions : salesTaxOptions;
 
   function runDeleteRow(id: string) {
+    if (!confirm("Delete this transaction?")) return;
     const formData = new FormData();
     formData.set("ids", id);
+    // Remove immediately so empty/new rows disappear without waiting for refresh
+    setRows((prev) => prev.filter((tx) => tx.id !== id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     startTransition(async () => {
       const result = await deleteTransactionsAction(formData);
       if (result.ok) {
         toast.success(result.message ?? "Deleted");
-        setSelected((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      } else toast.error(result.error ?? "Delete failed");
+      } else {
+        toast.error(result.error ?? "Delete failed");
+        router.refresh();
+      }
     });
   }
 
@@ -1291,6 +1308,48 @@ export function TransactionsWorkspace({
     });
   }
 
+  function addRow() {
+    if (!activeBankId) {
+      toast.error("Select a bank first.");
+      return;
+    }
+    const bank = banks.find((b) => b.id === activeBankId);
+    const fd = new FormData();
+    fd.set("date", new Date().toISOString().slice(0, 10));
+    fd.set("description", "New transaction");
+    fd.set("moneyIn", "0");
+    fd.set("moneyOut", "0");
+    startTransition(async () => {
+      const result = await addReconciliationTransactionAction(fd);
+      if (!result.ok || !result.row) {
+        toast.error(result.error ?? "Could not add row");
+        return;
+      }
+      const r = result.row;
+      const next: TxRow = {
+        id: r.id,
+        bankAccountId: activeBankId,
+        date: r.date,
+        description: r.description,
+        moneyIn: r.moneyIn,
+        moneyOut: r.moneyOut,
+        accountNumber: r.accountNumber,
+        accountName: r.accountName,
+        province: null,
+        taxCodes: [],
+        provinceTaxCodes: [],
+        taxMode: "INCLUSIVE",
+        salesTaxAmountOverride: null,
+        provinceTaxAmountOverride: null,
+        notes: null,
+        bankName: bank?.name ?? bankName ?? undefined,
+        bankType: bank?.type,
+      };
+      setRows((prev) => [next, ...prev]);
+      toast.success("Row added");
+    });
+  }
+
   return (
     <div className="space-y-4">
       <div className="toolbar-stack">
@@ -1298,7 +1357,14 @@ export function TransactionsWorkspace({
           <div className="toolbar-left">
             {canEdit ? (
               <>
-                <button type="button" className="btn-converter btn-green" id="addRowBtn2">
+                <button
+                  type="button"
+                  className="btn-converter btn-green"
+                  id="addRowBtn2"
+                  disabled={pending || !activeBankId}
+                  onClick={addRow}
+                  title={!activeBankId ? "Select a bank first" : "Add a blank transaction"}
+                >
                   + Add Row
                 </button>
                 <button
@@ -1555,7 +1621,7 @@ export function TransactionsWorkspace({
                 Net Amount
               </th>
               <th>Notes</th>
-              <th>Actions</th>
+              <th className="row-actions">Actions</th>
             </tr>
           </thead>
           <tbody id="txBody">
@@ -1689,7 +1755,11 @@ export function TransactionsWorkspace({
         open={bulkDeleteOpen}
         onClose={() => setBulkDeleteOpen(false)}
         selectedIds={Array.from(selected)}
-        onDeleted={() => setSelected(new Set())}
+        onDeleted={() => {
+          const ids = new Set(selected);
+          setRows((prev) => prev.filter((tx) => !ids.has(tx.id)));
+          setSelected(new Set());
+        }}
       />
 
       {parseLoadingFile ? (
@@ -1794,17 +1864,31 @@ export function TransactionsWorkspace({
                     ))}
                 </Select>
               ) : (
-                <div className="mt-3">
-                  <Label>New account name</Label>
-                  <Input
-                    value={newBankName}
-                    onChange={(e) => setNewBankName(e.target.value)}
-                    placeholder={
-                      importStatementType === "CREDIT_CARD"
-                        ? "Visa / Mastercard"
-                        : "RBC Chequing / Imported Statements"
-                    }
-                  />
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label>Account name</Label>
+                    <Input
+                      value={newBankName}
+                      onChange={(e) => setNewBankName(e.target.value)}
+                      placeholder={
+                        importStatementType === "CREDIT_CARD"
+                          ? "Visa / Mastercard"
+                          : "RBC Chequing / Imported Statements"
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Chart account number</Label>
+                    <Input
+                      value={newBankGlNumber}
+                      onChange={(e) => setNewBankGlNumber(e.target.value)}
+                      placeholder="e.g. 1010"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      Saved on the bank; selecting this posting account fills Category / Account #
+                      on rows.
+                    </p>
+                  </div>
                 </div>
               )}
               <div className="mt-3 flex flex-wrap items-center gap-2">

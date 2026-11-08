@@ -619,6 +619,7 @@ export async function updateTransactionCategoryAction(
     revalidatePath("/app/gst");
     revalidatePath("/app/pst");
     revalidatePath("/app/general-entries");
+    revalidatePath("/app/reconciliation");
   }
 
   return {

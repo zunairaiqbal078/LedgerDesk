@@ -5,6 +5,18 @@ import {
   DEFAULT_TAX_CODES,
 } from "@/lib/canada-defaults.generated";
 
+/** Opt-in starter row so “None” is a real category when editing transactions. */
+export const NONE_CHART_ACCOUNT = {
+  number: "0",
+  name: "None",
+  type: "EXPENSE" as const,
+  defaultGstCode: null,
+  defaultPstCode: null,
+} as const;
+
+/** Predefined small-business chart plus the None row (seed / preview). */
+export const STARTER_CHART_ACCOUNTS = [NONE_CHART_ACCOUNT, ...DEFAULT_CHART_ACCOUNTS];
+
 export { DEFAULT_CHART_ACCOUNTS, DEFAULT_RULES, DEFAULT_TAX_CODES };
 // DEFAULT_RULES kept in re-export for “Add predefined rules” UI / fill helper.
 export {

@@ -3,9 +3,30 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { bulkCategorizeAction } from "@/app/actions/books";
+import { NONE_CHART_ACCOUNT } from "@/lib/org-defaults";
+import {
+  filterProvinceTaxPickerOptions,
+  filterSalesTaxPickerOptions,
+} from "@/lib/tax-helpers";
+
 type Bank = { id: string; name: string; type: "BANK" | "CREDIT_CARD" };
 type Account = { number: string; name: string };
 type TaxOption = { code: string; kind?: string; name?: string };
+
+function accountPickValue(number: string, name: string) {
+  if (!number.trim() && !name.trim()) return "";
+  return `${number.trim()}||${name.trim()}`;
+}
+
+function parseAccountPick(value: string): { number: string; name: string } {
+  if (!value) return { number: "", name: "" };
+  const sep = value.indexOf("||");
+  if (sep < 0) return { number: value.trim(), name: "" };
+  return {
+    number: value.slice(0, sep).trim(),
+    name: value.slice(sep + 2).trim(),
+  };
+}
 
 export function BulkEditTransactionsModal({
   open,
@@ -43,17 +64,27 @@ export function BulkEditTransactionsModal({
   const [selectedPstTaxes, setSelectedPstTaxes] = useState<string[]>([]);
   const [taxMode, setTaxMode] = useState<"INCLUSIVE" | "EXCLUSIVE">("INCLUSIVE");
 
-  const salesTaxOptions = useMemo(
-    () =>
-      taxCodes.filter(
-        (t) => !t.kind || t.kind === "GST_HST" || t.kind === "NONE" || t.kind === "OTHER",
-      ),
-    [taxCodes],
-  );
-  const pstTaxOptions = useMemo(
-    () => taxCodes.filter((t) => t.kind === "PST"),
-    [taxCodes],
-  );
+  const salesTaxOptions = useMemo(() => filterSalesTaxPickerOptions(taxCodes), [taxCodes]);
+  const pstTaxOptions = useMemo(() => filterProvinceTaxPickerOptions(taxCodes), [taxCodes]);
+
+  const accountOptions = useMemo(() => {
+    const byNumber = new Map<string, Account>();
+    for (const a of accounts) {
+      const num = a.number.trim();
+      if (num) byNumber.set(num, { number: num, name: a.name.trim() });
+    }
+    if (!byNumber.has(NONE_CHART_ACCOUNT.number)) {
+      byNumber.set(NONE_CHART_ACCOUNT.number, {
+        number: NONE_CHART_ACCOUNT.number,
+        name: NONE_CHART_ACCOUNT.name,
+      });
+    }
+    return [...byNumber.values()].sort((a, b) =>
+      a.number.localeCompare(b.number, undefined, { numeric: true }),
+    );
+  }, [accounts]);
+
+  const accountPick = accountPickValue(accountNumber, accountName);
 
   useEffect(() => {
     if (!open) return;
@@ -86,18 +117,6 @@ export function BulkEditTransactionsModal({
 
   if (!open) return null;
 
-  function syncAccountFromNumber(num: string) {
-    setAccountNumber(num);
-    const ac = accounts.find((a) => a.number === num);
-    if (ac) setAccountName(ac.name);
-  }
-
-  function syncAccountFromName(name: string) {
-    setAccountName(name);
-    const ac = accounts.find((a) => a.name === name);
-    if (ac) setAccountNumber(ac.number);
-  }
-
   function apply() {
     const flags = [applyPosting, applyAccount, applySalesTax, applyPstTax, applyTaxMode];
     if (!flags.some(Boolean)) {
@@ -128,7 +147,10 @@ export function BulkEditTransactionsModal({
     }
     if (applyPstTax) {
       formData.set("applyPstTax", "true");
-      formData.set("provinceTaxCodes", selectedPstTaxes.join(","));
+      const pstPayload = selectedPstTaxes.includes("NONE")
+        ? selectedPstTaxes.filter((c) => c !== "NONE").join(",")
+        : selectedPstTaxes.join(",");
+      formData.set("provinceTaxCodes", pstPayload);
     }
     if (applyTaxMode) {
       formData.set("applyTaxMode", "true");
@@ -202,38 +224,29 @@ export function BulkEditTransactionsModal({
                   Account / Category
                 </label>
                 <select
-                  value={accountNumber}
+                  value={accountPick}
                   onChange={(e) => {
-                    syncAccountFromNumber(e.target.value);
+                    const { number, name } = parseAccountPick(e.target.value);
+                    setAccountNumber(number);
+                    setAccountName(name);
                     setApplyAccount(true);
                   }}
                 >
-                  <option value="">— Account number —</option>
-                  {accounts.map((a) => (
-                    <option key={a.number} value={a.number}>
-                      {a.number}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="mt-2"
-                  value={accountName}
-                  onChange={(e) => {
-                    syncAccountFromName(e.target.value);
-                    setApplyAccount(true);
-                  }}
-                >
-                  <option value="">— Category / account —</option>
-                  {accounts.map((a) => (
-                    <option key={`${a.number}-${a.name}`} value={a.name}>
-                      {a.name}
-                    </option>
-                  ))}
+                  <option value="">None — clear category</option>
+                  {accountOptions.map((a) => {
+                    const value = accountPickValue(a.number, a.name);
+                    return (
+                      <option key={value} value={value}>
+                        {a.number} · {a.name}
+                      </option>
+                    );
+                  })}
                 </select>
                 {focusField === "account" ? (
                   <p className="hint mt-1">
-                    Sets Account Number and Category / Account on the chosen transactions. Leave
-                    blank to clear.
+                    Pick one row (number and name together). Use <strong>None — clear category</strong>{" "}
+                    to remove the category, or <strong>0 · None</strong> for the predefined None
+                    account.
                   </p>
                 ) : null}
               </div>
@@ -295,7 +308,10 @@ export function BulkEditTransactionsModal({
                     </option>
                   ))}
                 </select>
-                <p className="hint mt-1">These feed PST Calculation only.</p>
+                <p className="hint mt-1">
+                  Includes codes from Tax Codes and rules. Choose <strong>NONE</strong> to clear
+                  province tax on the selected rows.
+                </p>
               </div>
             ) : null}
 

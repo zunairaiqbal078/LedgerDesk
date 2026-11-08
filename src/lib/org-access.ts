@@ -21,7 +21,14 @@ export type ResolvedOrgAccess = {
     firmOrganizationId: string | null;
     banks: Pick<
       BankAccount,
-      "id" | "name" | "type" | "mask" | "currency" | "isArchived"
+      | "id"
+      | "name"
+      | "type"
+      | "mask"
+      | "currency"
+      | "isArchived"
+      | "glAccountNumber"
+      | "glAccountName"
     >[];
   };
   role: OrgRole;
@@ -31,7 +38,14 @@ export type ResolvedOrgAccess = {
 type OrganizationWithBanks = Organization & {
   banks: Pick<
     BankAccount,
-    "id" | "name" | "type" | "mask" | "currency" | "isArchived"
+    | "id"
+    | "name"
+    | "type"
+    | "mask"
+    | "currency"
+    | "isArchived"
+    | "glAccountNumber"
+    | "glAccountName"
   >[];
 };
 
